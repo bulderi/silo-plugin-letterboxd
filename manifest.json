@@ -1,0 +1,50 @@
+{
+  "plugin_id": "bulderi.letterboxd",
+  "version": "0.2.0",
+  "checksum": "__CHECKSUM__",
+  "silo_api_version": "v1",
+  "supported_platforms": [
+    { "os": "linux", "arch": "amd64" },
+    { "os": "linux", "arch": "arm64" },
+    { "os": "darwin", "arch": "arm64" }
+  ],
+  "capabilities": [
+    {
+      "type": "watch_sync_provider.v1",
+      "id": "letterboxd",
+      "display_name": "Letterboxd",
+      "description": "Syncs your Letterboxd watchlist with your Silo watchlist in both directions. Movies only; TV series in Silo are left alone.",
+      "watch_sync_provider": {
+        "auth_methods": ["WATCH_SYNC_AUTH_METHOD_API_KEY"],
+        "supported_media_types": ["WATCH_SYNC_MEDIA_TYPE_MOVIE"],
+        "external_id_namespaces": ["tmdb", "imdb"],
+        "max_batch_size": 10,
+        "import_watchlist": true,
+        "export_watchlist": true,
+        "remove_watchlist": true,
+        "provides_watchlist_order": true
+      },
+      "config_schema": [
+        {
+          "key": "account",
+          "title": "Sign in to Letterboxd",
+          "description": "Letterboxd has no API keys. Enter your username or email here, and your Letterboxd password in the box labeled API key below. Silo stores both encrypted; the password is only used to sign in again when the session expires. Only the watchlist syncs; the other options on this page have no effect for Letterboxd.",
+          "json_schema": "{\"type\":\"object\",\"required\":[\"username\"],\"properties\":{\"username\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":254}},\"additionalProperties\":false}",
+          "required": true,
+          "admin_form": {
+            "fields": [
+              {
+                "key": "username",
+                "label": "Username or email",
+                "description": "The name you sign in to letterboxd.com with.",
+                "control": "ADMIN_FORM_CONTROL_TEXT",
+                "placeholder": "username",
+                "required": true
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
-github.com/Silo-Server/silo-plugin-sdk v0.17.0 h1:dHA4UbObMVIzAaLQC4clq1bSWuPaim88yptIRR5/f/M=
-github.com/Silo-Server/silo-plugin-sdk v0.17.0/go.mod h1:abwsCEKuPAAgeAqpNGbwoaut2eQlC/Kj97u89Vvg9qM=
+github.com/Silo-Server/silo-plugin-sdk v0.24.0 h1:g/Lfk/e1VQEdepHD/U+nrqu8dy+0vcVAO26qvwcVx9o=
+github.com/Silo-Server/silo-plugin-sdk v0.24.0/go.mod h1:abwsCEKuPAAgeAqpNGbwoaut2eQlC/Kj97u89Vvg9qM=
 github.com/andybalholm/brotli v1.2.0 h1:ukwgCxwYrmACq68yiUqwIWnGY0cTPox/M94sVwToPjQ=
 github.com/andybalholm/brotli v1.2.0/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/bdandy/go-errors v1.2.2 h1:WdFv/oukjTJCLa79UfkGmwX7ZxONAihKu4V0mLIs11Q=

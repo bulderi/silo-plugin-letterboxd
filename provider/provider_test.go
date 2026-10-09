@@ -908,3 +908,55 @@ func TestSnapshotLifetimeAndTokens(t *testing.T) {
 		t.Fatal("an unused snapshot outlived its lifetime")
 	}
 }
+
+// Entries left out of the snapshot, and films served from older data, are
+// named in page warnings that Silo shows with the sync run.
+func TestListWatchlistReportsSkippedEntries(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	h := newHarness(t, func(o *Options) { o.Now = func() time.Time { return now } })
+	h.site.SetWatchlist("aA1", "eE5", "fF6")
+	h.connect()
+	if _, _, fault := h.listAll(); fault != nil {
+		t.Fatal(fault)
+	}
+	now = now.Add(200 * 24 * time.Hour)
+	h.site.RemoveFilmPage("the-quiet-harbor")
+	resp, err := h.p.ListRemoteState(context.Background(), &pluginv1.WatchSyncListRemoteStateRequest{
+		Context:    h.authContext(),
+		StateKinds: []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST},
+	})
+	if err != nil || resp.GetFault() != nil || resp.GetNextPageToken() != "" {
+		t.Fatalf("resp = %v, %v", resp, err)
+	}
+	got := strings.Join(resp.GetWarnings(), "\n")
+	for _, want := range []string{
+		"Skipped 1 Letterboxd watchlist entry listed as TV, not a movie: The Mini Series (2016)",
+		"Skipped 1 film that has no TMDB or IMDb link on Letterboxd: Unlinked Short (2023)",
+		"Used saved IDs for 1 film whose Letterboxd page was not found: The Quiet Harbor (2019)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warnings missing %q:\n%s", want, got)
+		}
+	}
+	if keys := keys(resp.GetItems()); strings.Join(keys, ",") != "letterboxd:aA1" {
+		t.Fatalf("items = %v", keys)
+	}
+}
+
+func TestSummarizeNamesStaysUnderTheHostLimit(t *testing.T) {
+	var names []string
+	for i := 0; i < 40; i++ {
+		names = append(names, fmt.Sprintf("A Fairly Long Film Title Number %d (2001)", i))
+	}
+	got := summarizeNames("Skipped 40 films that have no TMDB or IMDb link on Letterboxd", names)
+	if len(got) > maxWarningBytes || !strings.Contains(got, "more") {
+		t.Fatalf("%d bytes: %s", len(got), got)
+	}
+	long := []string{strings.Repeat("x", 400)}
+	if got := summarizeNames("Skipped 1 film", long); len(got) > maxWarningBytes || !strings.Contains(got, "1 not listed") {
+		t.Fatalf("oversized name: %q", got)
+	}
+	if got := summarizeNames("Skipped 2", []string{"A (2001)", "B (2002)"}); got != "Skipped 2: A (2001); B (2002)" {
+		t.Fatalf("got %q", got)
+	}
+}

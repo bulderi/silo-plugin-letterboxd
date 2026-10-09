@@ -82,3 +82,21 @@ func TestManifestConnectionConfigMatchesProvider(t *testing.T) {
 		t.Error("json_schema does not declare the form field")
 	}
 }
+
+// The manifest carries the complete presentation block catalogs require, and
+// its source link points at this repository.
+func TestManifestPresentation(t *testing.T) {
+	manifest, err := publicmanifest.Load(manifestJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publicmanifest.ValidateCatalogPresentation(manifest, "https://github.com/bulderi/silo-plugin-letterboxd"); err != nil {
+		t.Fatalf("presentation: %v", err)
+	}
+	if manifest.GetCategory() != "Watch Providers" {
+		t.Errorf("category = %q, want the category first-party watch providers use", manifest.GetCategory())
+	}
+	if got := manifest.GetPresentation().GetLicenseSpdx(); got != "AGPL-3.0-only" {
+		t.Errorf("license_spdx = %q, want the license in LICENSE", got)
+	}
+}

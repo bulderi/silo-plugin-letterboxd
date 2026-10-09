@@ -470,7 +470,7 @@ func (c *Client) send(ctx context.Context, r request) (response, error) {
 		}
 		return response{}, fmt.Errorf("letterboxd %s %s: %w", r.method, r.path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		return response{}, fmt.Errorf("read letterboxd %s %s: %w", r.method, r.path, err)

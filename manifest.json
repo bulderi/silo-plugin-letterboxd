@@ -1,23 +1,30 @@
 {
   "plugin_id": "bulderi.letterboxd",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "supported_platforms": [
+    { "os": "darwin", "arch": "arm64" },
     { "os": "linux", "arch": "amd64" },
-    { "os": "linux", "arch": "arm64" },
-    { "os": "darwin", "arch": "arm64" }
+    { "os": "linux", "arch": "arm64" }
   ],
   "capabilities": [
     {
       "type": "watch_sync_provider.v1",
       "id": "letterboxd",
       "display_name": "Letterboxd",
-      "description": "Syncs your Letterboxd watchlist with your Silo watchlist in both directions. Movies only; TV series in Silo are left alone.",
+      "description": "Two-way watchlist sync for a Letterboxd account, movies only, in Letterboxd's own order.",
       "watch_sync_provider": {
-        "auth_methods": ["WATCH_SYNC_AUTH_METHOD_API_KEY"],
-        "supported_media_types": ["WATCH_SYNC_MEDIA_TYPE_MOVIE"],
-        "external_id_namespaces": ["tmdb", "imdb"],
+        "auth_methods": [
+          "WATCH_SYNC_AUTH_METHOD_API_KEY"
+        ],
+        "supported_media_types": [
+          "WATCH_SYNC_MEDIA_TYPE_MOVIE"
+        ],
+        "external_id_namespaces": [
+          "tmdb",
+          "imdb"
+        ],
         "max_batch_size": 10,
         "import_watchlist": true,
         "export_watchlist": true,
@@ -46,5 +53,19 @@
         }
       ]
     }
-  ]
+  ],
+  "category": "Watch Providers",
+  "presentation": {
+    "display_name": "Letterboxd Watch Provider",
+    "summary": "Sync a Silo profile's watchlist with a Letterboxd watchlist, movies only.",
+    "description_markdown": "Imports the Letterboxd watchlist into Silo in Letterboxd's order, sends watchlist adds and removals made in Silo back to Letterboxd, and leaves series alone. Letterboxd has no public API for this, so the plugin uses the website the way a signed-in browser does.",
+    "setup_markdown": "Each Silo profile connects with its own Letterboxd account: the username or email goes in the connection's username field, and the Letterboxd password in the field Silo labels API key. Silo stores both encrypted. The plugin needs no server-wide settings.\n\nTurn on **Sync watchlist removals** so a film removed on one side is removed on the other. The first sync looks up every watchlisted film once, at about 1.5 seconds per film; later syncs take seconds.",
+    "homepage_url": "https://letterboxd.com",
+    "source_url": "https://github.com/bulderi/silo-plugin-letterboxd",
+    "support_url": "https://github.com/bulderi/silo-plugin-letterboxd/issues",
+    "changelog_url": "https://github.com/bulderi/silo-plugin-letterboxd/releases",
+    "publisher_name": "bulderi",
+    "publisher_url": "https://github.com/bulderi",
+    "license_spdx": "AGPL-3.0-only"
+  }
 }

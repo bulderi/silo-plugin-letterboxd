@@ -259,6 +259,7 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 	}
 
 	var items []*pluginv1.WatchSyncRemoteState
+	var warnings pageWarnings
 	for snap.films != nil && snap.offset < len(snap.films) {
 		poster := snap.films[snap.offset]
 		film, cached := p.cache.byLIDFresh(poster.LID)
@@ -267,14 +268,23 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 			if worked && !p.now().Before(deadline) {
 				break
 			}
+			var stale bool
 			var err error
-			if film, err = p.fetchPoster(ctx, sess, poster); err != nil {
+			if film, stale, err = p.fetchPoster(ctx, sess, poster); err != nil {
 				return fail(err, "film lookup "+poster.Slug)
+			}
+			if stale {
+				warnings.stale = append(warnings.stale, poster.Name)
 			}
 			worked = true
 		}
-		if film.isMovie() {
+		switch {
+		case film.isMovie():
 			items = append(items, remoteState(film))
+		case film.TMDBType == "tv":
+			warnings.tv = append(warnings.tv, poster.Name)
+		default:
+			warnings.unlinked = append(warnings.unlinked, poster.Name)
 		}
 		snap.offset++
 	}
@@ -284,6 +294,7 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 		Items:              items,
 		CompleteSnapshot:   true,
 		UpdatedCredentials: sess.updated(),
+		Warnings:           warnings.list(),
 	}
 	if snap.finished() {
 		p.snapshots.drop(snap.id)
@@ -315,25 +326,26 @@ func (p *Provider) readWatchlistPage(ctx context.Context, sess *session, reader 
 var errFilmPageMissing = errors.New("a watchlisted film's page was not found")
 
 // fetchPoster reads a watchlist film's external ids from its film page and
-// caches them.
-func (p *Provider) fetchPoster(ctx context.Context, sess *session, poster letterboxd.Poster) (cachedFilm, error) {
+// caches them. stale reports that the page was gone and an older lookup was
+// used instead.
+func (p *Provider) fetchPoster(ctx context.Context, sess *session, poster letterboxd.Poster) (film cachedFilm, stale bool, err error) {
 	page, err := sess.client.Film(ctx, poster.Slug)
 	if errors.Is(err, letterboxd.ErrNotFound) {
-		if stale, ok := p.cache.byLIDAny(poster.LID); ok {
-			return stale, nil
+		if old, ok := p.cache.byLIDAny(poster.LID); ok {
+			return old, true, nil
 		}
-		return cachedFilm{}, fmt.Errorf("film %s: %w", poster.Slug, errFilmPageMissing)
+		return cachedFilm{}, false, fmt.Errorf("film %s: %w", poster.Slug, errFilmPageMissing)
 	}
 	if err != nil {
-		return cachedFilm{}, err
+		return cachedFilm{}, false, err
 	}
-	film := cachedFromPage(page, p.now())
+	film = cachedFromPage(page, p.now())
 	film.LID = poster.LID
 	if film.Title == "" {
 		film.Title, film.Year = letterboxd.TitleYear(poster.Name)
 	}
 	p.cache.put(film)
-	return film, nil
+	return film, false, nil
 }
 
 func remoteState(film cachedFilm) *pluginv1.WatchSyncRemoteState {

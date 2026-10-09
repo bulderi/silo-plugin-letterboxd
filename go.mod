@@ -3,7 +3,7 @@ module github.com/bulderi/silo-plugin-letterboxd
 go 1.26.0
 
 require (
-	github.com/Silo-Server/silo-plugin-sdk v0.17.0
+	github.com/Silo-Server/silo-plugin-sdk v0.24.0
 	github.com/bogdanfinn/fhttp v0.6.9
 	github.com/bogdanfinn/tls-client v1.16.0
 	github.com/hashicorp/go-hclog v1.6.3

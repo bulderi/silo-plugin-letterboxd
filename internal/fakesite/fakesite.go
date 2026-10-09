@@ -399,7 +399,7 @@ func (s *Site) filmByLID(lid string) (Film, bool) {
 // signed-in member is filled in by JavaScript, so nothing may rely on it.
 func (s *Site) writePage(w http.ResponseWriter, _ bool, title, body string) {
 	w.Header().Set("content-type", "text/html; charset=UTF-8")
-	fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>%s</title><script>
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>%s</title><script>
 			person = {
 				username: ""
 				, loggedIn: false

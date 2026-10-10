@@ -100,3 +100,21 @@ func TestManifestPresentation(t *testing.T) {
 		t.Errorf("license_spdx = %q, want the license in LICENSE", got)
 	}
 }
+
+// TestManifestContract runs the bootstrap ServeManifest runs: it validates the
+// manifest and stamps the version and the running binary's checksum.
+func TestManifestContract(t *testing.T) {
+	manifest, err := publicmanifest.LoadWithChecksum(manifestJSON, version)
+	if err != nil {
+		t.Fatalf("LoadWithChecksum() returned error: %v", err)
+	}
+	if got, want := manifest.GetPluginId(), "bulderi.letterboxd"; got != want {
+		t.Fatalf("plugin_id = %q, want %q (changing it would orphan existing connections)", got, want)
+	}
+	if got := manifest.GetChecksum(); got == "" || got == "__CHECKSUM__" {
+		t.Fatalf("checksum = %q, want the running binary's sha256", got)
+	}
+	if version == "" && manifest.GetVersion() == "" {
+		t.Fatal("manifest has no version")
+	}
+}

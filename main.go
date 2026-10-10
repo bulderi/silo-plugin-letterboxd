@@ -33,12 +33,17 @@ func main() {
 		Output:     os.Stderr,
 		JSONFormat: true,
 	})
-	p := provider.New(provider.Options{
+	sdkruntime.ServeManifest(manifestJSON, version, capabilityServers(provider.Options{
 		Throttle: letterboxd.NewThrottle(requestInterval),
 		Store:    hostStore{},
 		Logger:   logger,
-	})
-	sdkruntime.ServeManifest(manifestJSON, version, sdkruntime.CapabilityServers{WatchSyncProvider: p})
+	}))
+}
+
+// capabilityServers is what main serves; tests build the same set against a
+// fake Letterboxd.
+func capabilityServers(opts provider.Options) sdkruntime.CapabilityServers {
+	return sdkruntime.CapabilityServers{WatchSyncProvider: provider.New(opts)}
 }
 
 var errHostUnavailable = errors.New("silo runtime host is not bound yet")

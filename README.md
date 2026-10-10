@@ -12,6 +12,14 @@ signed-in browser does, with a Chrome TLS fingerprint because sign-in sits
 behind Cloudflare. A change on Letterboxd's side can break it until the plugin
 is updated.
 
+## Requirements
+
+A Silo server whose plugin host runs watchlist sync for `watch_sync_provider.v1`
+plugins. The sync warnings below show on servers that include
+[Silo-Server/silo-server#1800](https://github.com/Silo-Server/silo-server/pull/1800),
+in the `latest` image since October 2026; older servers sync the same way and
+ignore the warnings.
+
 ## Capabilities
 
 - Imports the Letterboxd watchlist into the Silo watchlist, in Letterboxd's
@@ -116,8 +124,15 @@ make build       # local binary
 make build-all   # dist/ binaries for the platforms in manifest.json
 ```
 
+The build takes its version from `manifest.json`, so Silo's plugin admin shows
+which build is installed. The plugin starts through the SDK's manifest
+bootstrap (`runtime.ServeManifest`), which validates the manifest, stamps the
+version and the binary's checksum, and answers `plugin manifest`.
+
 Tests run against `internal/fakesite`, an in-memory stand-in for letterboxd.com
 that serves the same markup as the real pages, with invented films and members.
+`grpc_test.go` serves the plugin through the SDK's plugin set and calls it over
+gRPC, the way the host does.
 
 ```
 main.go               serve the plugin; instance-state adapter
@@ -127,8 +142,10 @@ internal/fakesite/    fake letterboxd.com for tests
 cmd/lbcheck/          live diagnostics
 ```
 
-Releases are tag-driven: pushing a `v*` tag builds the binaries for every
-platform, writes `checksums.txt`, and publishes a GitHub release.
+Pushing a tag that matches the manifest version (`v0.3.0`) runs the release
+workflow, which builds every platform and publishes the binaries with
+`checksums.txt`. Bump `version` in `manifest.json` first; there is no automatic
+version bump. [CONTRIBUTING.md](CONTRIBUTING.md) lists the checks to run first.
 
 ## Contributing
 

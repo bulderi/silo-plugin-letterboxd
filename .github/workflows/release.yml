@@ -1,6 +1,6 @@
 name: Release
 
-# Releases only from a tag pushed by hand, such as v0.3.0. The tag must match
+# Releases only from a tag pushed by hand, such as v0.3.1. The tag must match
 # the version in manifest.json exactly; there is no automatic version bump.
 on:
   push:
@@ -8,114 +8,83 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: plugin-release
+  cancel-in-progress: false
 
 jobs:
-  version:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: checks
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
+    permissions:
+      contents: write
+    env:
+      GOWORK: off
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - name: Check the tag against manifest.json
-        id: version
-        run: |
-          tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
-          manifest_version="$(jq -r '.version' manifest.json)"
-          if [ "$version" != "$manifest_version" ]; then
-            echo "Tag ${tag} does not match manifest.json version ${manifest_version}."
-            exit 1
-          fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-
-  build:
-    needs: version
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: arm64
-          - os: macos-latest
-            goos: darwin
-            goarch: arm64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.version.outputs.tag }}
-
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
 
-      - name: Reject committed local SDK replaces
+      - name: Check the tag against manifest.json
         run: |
-          if grep -Eq '^replace github.com/Silo-Server/silo-plugin-sdk => /' go.mod; then
-            echo "go.mod contains a machine-local silo-plugin-sdk replace."
+          version="${GITHUB_REF_NAME#v}"
+          manifest_version="$(jq -r '.version' manifest.json)"
+          if [ "$version" != "$manifest_version" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match manifest.json version ${manifest_version}."
             exit 1
           fi
 
-      - name: Build plugin binary
+      - name: Build every platform
+        run: make build-all
+
+      - name: Write checksums and the install index
+        run: |
+          (cd dist && sha256sum plugin-* > checksums.txt)
+          go run ./cmd/genindex -repo "$GITHUB_REPOSITORY" -tag "$GITHUB_REF_NAME" \
+            -dist dist -out dist/index.json
+
+      - name: Publish release
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: '0'
-          GOWORK: off
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p dist
-          binary="plugin-${GOOS}-${GOARCH}"
-          version="${{ needs.version.outputs.version }}"
-          go build -trimpath -ldflags="-s -w -X main.version=${version}" -o "dist/${binary}" .
-          checksum=$(shasum -a 256 "dist/${binary}" | awk '{print $1}')
-          printf '%s  %s\n' "$checksum" "$binary" > dist/checksums.txt
-          sed "s/__CHECKSUM__/${checksum}/" manifest.json > "dist/manifest-${GOOS}-${GOARCH}.json"
+          gh release create "$GITHUB_REF_NAME" dist/plugin-* dist/checksums.txt dist/index.json \
+            --verify-tag --title "Letterboxd Watch Provider ${GITHUB_REF_NAME#v}" --generate-notes
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: plugin-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: |
-            dist/plugin-${{ matrix.goos }}-${{ matrix.goarch }}
-            dist/checksums.txt
-            dist/manifest-${{ matrix.goos }}-${{ matrix.goarch }}.json
-
-  release:
-    needs: [version, build]
+  install-index:
+    needs: publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          path: artifacts
+          ref: main
 
-      - name: Prepare release assets
+      - name: Publish the released index on main
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p release
-          : > release/checksums.txt
-          for dir in artifacts/plugin-*; do
-            platform=$(basename "$dir" | sed 's/plugin-//')
-            cp "${dir}/plugin-${platform}" "release/plugin-${platform}"
-            cat "${dir}/checksums.txt" >> release/checksums.txt
-          done
-          sort -u -o release/checksums.txt release/checksums.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          files: |
-            release/plugin-linux-amd64
-            release/plugin-linux-arm64
-            release/plugin-darwin-arm64
-            release/checksums.txt
-          generate_release_notes: true
+          version="${GITHUB_REF_NAME#v}"
+          current="$(jq -r '.version' manifest.json)"
+          if [ "$current" != "$version" ]; then
+            echo "::notice::main has moved to version ${current}; the ${GITHUB_REF_NAME} index stays on the release."
+            exit 0
+          fi
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern index.json --dir "$RUNNER_TEMP/index"
+          cp "$RUNNER_TEMP/index/index.json" index.json
+          git add index.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: publish install index for ${GITHUB_REF_NAME}"
+          git push origin HEAD:main

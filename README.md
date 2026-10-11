@@ -32,17 +32,49 @@ ignore the warnings.
 Letterboxd watched history, ratings, likes, and lists are not synced, and the
 other options Silo shows on the connection have no effect for Letterboxd.
 
+## Install
+
+1. In Silo, open the administrator **Plugins** page, select **Catalog**, and
+   click **Add repository**. Name it, for example, **Letterboxd**, and use this
+   URL:
+
+   ```text
+   https://raw.githubusercontent.com/bulderi/silo-plugin-letterboxd/main/index.json
+   ```
+
+2. Find **Letterboxd Watch Provider** in the catalog and click **Install**.
+
+Silo downloads the binary for its platform and checks its SHA-256, and new
+releases appear as updates. Binaries are published for Linux amd64, Linux
+arm64, and macOS arm64.
+
+An installation uploaded by hand is not linked to the repository: Silo checks
+only repository installations for updates, and the catalog shows the plugin as
+already installed. To link it without reconnecting anyone, add the repository,
+then install the same version from it through the admin API. Silo replaces the
+installation in place, so its ID, the film cache, and every Letterboxd
+connection stay:
+
+```sh
+curl -X POST "$SILO_URL/api/v2/admin/plugins/installations" \
+  -H "Authorization: Bearer $SILO_ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"repository_id": <id>, "plugin_id": "bulderi.letterboxd", "version": "<version>"}'
+```
+
+`GET /api/v2/admin/plugins/repositories` lists the repository ID. The call
+needs an unscoped API key owned by an administrator. Uninstalling and installing from the
+catalog also links it, but the new installation needs every profile to connect
+Letterboxd again.
+
 ## Setup
 
-1. Install the plugin by uploading the binary for the server's platform in
-   Silo's admin plugin settings. It has no server-wide settings.
-2. In a profile's watch-provider settings, connect **Letterboxd**: the username
+1. In a profile's watch-provider settings, connect **Letterboxd**: the username
    or email goes in the username field, the Letterboxd password in the field
-   Silo labels **API key**.
-3. Turn on **Sync watchlist removals**. Silo imports before it sends pending
+   Silo labels **API key**. The plugin has no server-wide settings.
+2. Turn on **Sync watchlist removals**. Silo imports before it sends pending
    local removals, so with removal sync off, a film removed in Silo comes back
    on the next sync while it is still on Letterboxd.
-4. **Mirror watchlist order** keeps Silo in Letterboxd's order. Titles that are
+3. **Mirror watchlist order** keeps Silo in Letterboxd's order. Titles that are
    not on Letterboxd, such as series, sort after the films.
 
 Silo stores the username and password encrypted with the profile's connection.
@@ -140,12 +172,16 @@ provider/             watch_sync_provider.v1: auth, snapshots, film cache, event
 letterboxd/           HTTP client (Chrome TLS fingerprint), HTML parsing, watchlist reader
 internal/fakesite/    fake letterboxd.com for tests
 cmd/lbcheck/          live diagnostics
+cmd/genindex/         writes index.json for a release (internal/catalogindex)
 ```
 
-Pushing a tag that matches the manifest version (`v0.3.0`) runs the release
-workflow, which builds every platform and publishes the binaries with
-`checksums.txt`. Bump `version` in `manifest.json` first; there is no automatic
-version bump. [CONTRIBUTING.md](CONTRIBUTING.md) lists the checks to run first.
+To release, bump `version` in `manifest.json`, add the changes to
+[CHANGELOG.md](CHANGELOG.md), and push a matching tag (`v0.3.1`); there is no
+automatic version bump. The release workflow runs the CI checks, builds every
+platform, and publishes the binaries with `checksums.txt` and `index.json`,
+written by `cmd/genindex`. It then commits that `index.json` to `main`, which
+is the file the install URL serves. [CONTRIBUTING.md](CONTRIBUTING.md) lists
+the checks to run first.
 
 ## Contributing
 

@@ -58,11 +58,12 @@ connection stay:
 ```sh
 curl -X POST "$SILO_URL/api/v2/admin/plugins/installations" \
   -H "Authorization: Bearer $SILO_ADMIN_API_KEY" -H "Content-Type: application/json" \
-  -d '{"repository_id": <id>, "plugin_id": "bulderi.letterboxd", "version": "<version>"}'
+  -d '{"repository_id": "<id>", "plugin_id": "bulderi.letterboxd", "version": "<version>"}'
 ```
 
-`GET /api/v2/admin/plugins/repositories` lists the repository ID. The call
-needs an unscoped API key owned by an administrator. Uninstalling and installing from the
+`GET /api/v2/admin/plugins/repositories` lists the repository ID. The API
+takes it as a string, and the call needs an unscoped API key owned by an
+administrator. Uninstalling and installing from the
 catalog also links it, but the new installation needs every profile to connect
 Letterboxd again.
 

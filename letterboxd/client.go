@@ -27,6 +27,7 @@ const (
 	userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
 	secChUA   = `"Chromium";v="152", "Google Chrome";v="152", "Not A(Brand";v="99"`
 
+	maxRedirects     = 10
 	csrfCookie       = "com.xk72.webparts.csrf"
 	sessionCookie    = "letterboxd.user.CURRENT"
 	rememberCookie   = "letterboxd.user"
@@ -160,11 +161,47 @@ func New(opts Options) (*Client, error) {
 		tls_client.WithClientProfile(profiles.Chrome_152),
 		tls_client.WithTimeoutSeconds(int(timeout/time.Second)),
 		tls_client.WithCookieJar(tls_client.NewCookieJar()),
+		tls_client.WithCustomRedirectFunc(stayOnSite(base)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create http client: %w", err)
 	}
 	return &Client{base: base, http: hc, throttle: opts.Throttle}, nil
+}
+
+// ProbeLID is a film ID that cannot exist; see SessionCanWrite.
+const ProbeLID = "zZzZzZzZzZzZzZzZ"
+
+// stayOnSite refuses a redirect that leaves the base scheme and host. The
+// client's cookie jar matches on the domain alone and ignores Secure, so this
+// is what keeps the session cookies off plain HTTP.
+func stayOnSite(base *url.URL) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		if req.URL.Scheme != base.Scheme || req.URL.Host != base.Host {
+			return errors.New("letterboxd redirected to another site")
+		}
+		return nil
+	}
+}
+
+// ParseRememberCookie returns the remember-me cookie's value from what a member
+// pasted, either the value alone or name=value. ok is false for anything that
+// cannot be that cookie's value, such as a whole Cookie header or another
+// Letterboxd cookie.
+func ParseRememberCookie(input string) (value string, ok bool) {
+	value = strings.TrimPrefix(strings.TrimSpace(input), rememberCookie+"=")
+	if value == "" || strings.HasPrefix(value, "letterboxd.") {
+		return "", false
+	}
+	for _, r := range value {
+		if r <= ' ' || r >= 0x7f || strings.ContainsRune(`";,\`, r) {
+			return "", false
+		}
+	}
+	return value, true
 }
 
 // SetSession puts the session cookies in the jar. Empty values are skipped.
@@ -261,6 +298,33 @@ func (c *Client) SignedInAs() string {
 		value = unescaped
 	}
 	return strings.TrimSpace(value)
+}
+
+// IsSignedInAs reports whether the session belongs to username. Most pages are
+// cached guest templates, but the settings page puts a signed-in member's
+// username in a form field and has none for a guest. username must not need
+// HTML escaping.
+func (c *Client) IsSignedInAs(ctx context.Context, username string) (bool, error) {
+	resp, err := c.get(ctx, "/settings/", false)
+	if err != nil {
+		return false, err
+	}
+	field := `value="` + strings.ToLower(username) + `"`
+	return strings.Contains(strings.ToLower(string(resp.body)), field), nil
+}
+
+// SessionCanWrite reports whether the site accepts writes from this session,
+// without changing anything: it asks that a film that cannot exist not be on
+// the watchlist. The site answers 404 to a live session and 403 to a dead one.
+func (c *Client) SessionCanWrite(ctx context.Context) (bool, error) {
+	switch err := c.SetInWatchlist(ctx, ProbeLID, "", false); {
+	case err == nil, errors.Is(err, ErrNotFound):
+		return true, nil
+	case errors.Is(err, ErrSignedOut):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // Home loads the front page, which makes sure the jar holds a CSRF cookie.

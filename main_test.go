@@ -65,7 +65,7 @@ func TestManifestConnectionConfigMatchesProvider(t *testing.T) {
 		t.Fatalf("connection field = %q, provider reads %q", got, provider.ConnectionUsernameKey)
 	}
 	if fields[0].GetControl() == pluginv1.AdminFormControl_ADMIN_FORM_CONTROL_PASSWORD {
-		t.Error("the username must be a public field; the password goes in the API-key field")
+		t.Error("the username must be a public field; the cookie goes in the API-key field")
 	}
 	var document struct {
 		Type       string                     `json:"type"`

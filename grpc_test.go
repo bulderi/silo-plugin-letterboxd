@@ -84,8 +84,8 @@ func TestWatchSyncOverGRPC(t *testing.T) {
 
 	connected, err := client.ExchangeAPIKey(ctx, &pluginv1.WatchSyncExchangeAPIKeyRequest{
 		CapabilityId:   "letterboxd",
-		ProviderConfig: &pluginv1.WatchSyncProviderConfig{Values: map[string]string{provider.ConnectionUsernameKey: site.Email()}},
-		ApiKey:         site.Password(),
+		ProviderConfig: &pluginv1.WatchSyncProviderConfig{Values: map[string]string{provider.ConnectionUsernameKey: site.Username()}},
+		ApiKey:         site.IssueRememberCookie(),
 	})
 	if err != nil || connected.GetFault() != nil {
 		t.Fatalf("ExchangeAPIKey: %v %v", err, connected.GetFault())

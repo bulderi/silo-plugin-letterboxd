@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,6 +26,10 @@ const (
 	// deadlineHeadroom leaves time to answer before the host's RPC deadline.
 	deadlineHeadroom = 30 * time.Second
 )
+
+// usernamePattern is what can be a Letterboxd username. It keeps an email
+// address, a pasted URL, or a dot segment out of the watchlist path.
+var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // Options configures a Provider.
 type Options struct {
@@ -84,28 +89,65 @@ func (p *Provider) newClient() (*letterboxd.Client, error) {
 }
 
 // ExchangeAPIKey connects an account: the connection config carries the
-// username or email, the API-key field carries the password.
+// username, the API-key field carries the browser's remember-me cookie. The
+// site's sign-in page sits behind a Cloudflare challenge, so a new connection
+// never goes through it.
 func (p *Provider) ExchangeAPIKey(ctx context.Context, req *pluginv1.WatchSyncExchangeAPIKeyRequest) (*pluginv1.WatchSyncCredentialResponse, error) {
-	login := strings.TrimSpace(req.GetProviderConfig().GetValues()[ConnectionUsernameKey])
-	password := req.GetApiKey()
-	if login == "" || strings.TrimSpace(password) == "" {
-		return &pluginv1.WatchSyncCredentialResponse{Fault: newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST,
-			"Enter your Letterboxd username and password.")}, nil
+	invalid := func(message string) (*pluginv1.WatchSyncCredentialResponse, error) {
+		return &pluginv1.WatchSyncCredentialResponse{Fault: newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST, message)}, nil
 	}
-	creds, err := p.signIn(ctx, login, password)
+	username := strings.TrimSpace(req.GetProviderConfig().GetValues()[ConnectionUsernameKey])
+	if username == "" || strings.TrimSpace(req.GetApiKey()) == "" {
+		return invalid("Enter your Letterboxd username and the value of your letterboxd.user cookie.")
+	}
+	if !usernamePattern.MatchString(username) {
+		return invalid("Enter your Letterboxd username as it appears in your profile address, not your email address.")
+	}
+	cookie, ok := letterboxd.ParseRememberCookie(req.GetApiKey())
+	if !ok {
+		return invalid("That is not a cookie value. Paste only the value of the letterboxd.user cookie.")
+	}
+	creds, err := p.connectWithCookie(ctx, username, cookie)
 	if err != nil {
-		p.logger.Warn("letterboxd sign-in failed", "error", err)
+		p.logger.Warn("letterboxd connection failed", "error", err)
 		return &pluginv1.WatchSyncCredentialResponse{Fault: faultFor(err)}, nil
 	}
 	p.logger.Info("letterboxd account connected", "username", creds.account.Username)
 	return &pluginv1.WatchSyncCredentialResponse{Credentials: creds.proto(), Account: accountProto(creds.account.Username)}, nil
 }
 
-// RefreshCredentials signs in again with the stored password.
+// connectWithCookie accepts a cookie only if the site says it is signed in as
+// this username. Reads go to the typed username's list while writes go to the
+// cookie owner's, so a mismatch would make films added in Silo look removed
+// from the list that is read.
+func (p *Provider) connectWithCookie(ctx context.Context, username, cookie string) (credentials, error) {
+	client, err := p.newClient()
+	if err != nil {
+		return credentials{}, err
+	}
+	client.SetSession(letterboxd.Session{Remember: cookie})
+	owner, err := client.IsSignedInAs(ctx, username)
+	if err != nil {
+		return credentials{}, err
+	}
+	if !owner {
+		return credentials{}, errCookieNotOwner
+	}
+	session := client.Session()
+	session.CSRF = "" // see session.updated
+	return credentials{account: account{Username: username}, session: session}, nil
+}
+
+// RefreshCredentials signs in again with the stored password. A cookie
+// connection has nothing to renew with and returns what it has; a dead cookie
+// shows when a read or write is refused.
 func (p *Provider) RefreshCredentials(ctx context.Context, req *pluginv1.WatchSyncRefreshCredentialsRequest) (*pluginv1.WatchSyncCredentialResponse, error) {
 	stored, ok := credentialsFromContext(req.GetContext())
 	if !ok {
 		return &pluginv1.WatchSyncCredentialResponse{Fault: reconnectFault()}, nil
+	}
+	if !stored.account.canSignIn() {
+		return &pluginv1.WatchSyncCredentialResponse{Credentials: stored.proto(), Account: accountProto(stored.account.Username)}, nil
 	}
 	creds, err := p.signIn(ctx, stored.account.Login, stored.account.Password)
 	if err != nil {
@@ -156,6 +198,8 @@ type session struct {
 	creds    credentials
 	original letterboxd.Session
 	relogged bool
+	// refused records that the site refused a write on a cookie connection.
+	refused bool
 }
 
 func (p *Provider) openSession(authCtx *pluginv1.WatchSyncAuthenticatedContext) (*session, *pluginv1.WatchSyncFault) {
@@ -171,8 +215,12 @@ func (p *Provider) openSession(authCtx *pluginv1.WatchSyncAuthenticatedContext) 
 	return &session{client: client, creds: creds, original: creds.session}, nil
 }
 
-// relogin signs in again once per RPC, for an expired session.
+// relogin signs in again once per RPC, for an expired session. A cookie
+// connection has no password, so its user has to connect again.
 func (s *session) relogin(ctx context.Context) error {
+	if !s.creds.account.canSignIn() {
+		return errCookieInvalid
+	}
 	if s.relogged {
 		return letterboxd.ErrSignedOut
 	}
@@ -193,7 +241,13 @@ func (s *session) relogin(ctx context.Context) error {
 // session cookie or the RPC signed in again; nil when nothing changed.
 func (s *session) updated() *pluginv1.WatchSyncCredentials {
 	current := s.client.Session()
-	if current == s.original || current.Current == "" {
+	if !s.creds.account.canSignIn() {
+		// A cookie connection cannot sign in again to replace a stale CSRF
+		// token, and every write would look like a dead cookie. It stores none
+		// and loads a fresh one before its first write of each call.
+		current.CSRF = ""
+	}
+	if current == s.original || (current.Current == "" && current.Remember == "") {
 		return nil
 	}
 	creds := s.creds
@@ -400,6 +454,17 @@ func (p *Provider) ApplyEvents(ctx context.Context, req *pluginv1.WatchSyncApply
 		results = append(results, result)
 	}
 	p.flushCache(ctx)
+	if sess.refused && paused == nil {
+		// Only a confirmed dead cookie fails the connection; if the check itself
+		// fails, the refused films are simply retried.
+		alive, err := sess.client.SessionCanWrite(ctx)
+		if err != nil {
+			p.logger.Warn("letterboxd cookie check failed", "error", err)
+		} else if !alive {
+			p.logger.Warn("letterboxd no longer accepts the cookie", "username", sess.creds.account.Username)
+			return &pluginv1.WatchSyncApplyEventsResponse{Fault: faultFor(errCookieInvalid), UpdatedCredentials: sess.updated()}, nil
+		}
+	}
 	return &pluginv1.WatchSyncApplyEventsResponse{Results: results, UpdatedCredentials: sess.updated()}, nil
 }
 
@@ -432,7 +497,7 @@ func (p *Provider) applyOne(ctx context.Context, sess *session, event *pluginv1.
 	case errors.Is(err, letterboxd.ErrNotFound):
 		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_PERMANENT, "This movie is not on Letterboxd."), nil
 	case errors.Is(err, errWriteRefused):
-		p.logger.Warn("letterboxd refused a watchlist change with a fresh session", "lid", target.lid)
+		p.logger.Warn("letterboxd refused a watchlist change", "lid", target.lid)
 		return applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_RETRY,
 			newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY, "Letterboxd refused this change; it will be retried.")), nil
 	case errors.Is(err, letterboxd.ErrLoginRejected), errors.Is(err, letterboxd.ErrSignedOut):
@@ -444,17 +509,28 @@ func (p *Provider) applyOne(ctx context.Context, sess *session, event *pluginv1.
 	}
 }
 
-// errWriteRefused is a write the site refused although the session was just
-// renewed, so the account is fine and only this change failed.
-var errWriteRefused = errors.New("letterboxd refused the watchlist change")
+var (
+	// errWriteRefused is a write the site refused while the account looks
+	// fine, so only this change failed.
+	errWriteRefused = errors.New("letterboxd refused the watchlist change")
+	// errCookieInvalid is a cookie connection the site no longer accepts.
+	errCookieInvalid = fmt.Errorf("letterboxd did not accept the cookie: %w", letterboxd.ErrSignedOut)
+	// errCookieNotOwner is a new cookie that is dead or another member's.
+	errCookieNotOwner = errors.New("the cookie is not signed in as this username")
+)
 
 // writeWatchlist sets the film's watchlist state. A refusal with the stored
 // session signs in again once per request; a refusal right after a successful
-// sign-in is about this film, not the account.
+// sign-in is about this film, not the account. A cookie connection cannot
+// sign in to tell the two apart, so ApplyEvents checks the cookie afterwards.
 func (p *Provider) writeWatchlist(ctx context.Context, sess *session, target writeTarget, in bool) error {
 	err := sess.client.SetInWatchlist(ctx, target.lid, target.slug, in)
 	if !errors.Is(err, letterboxd.ErrSignedOut) {
 		return err
+	}
+	if !sess.creds.account.canSignIn() {
+		sess.refused = true
+		return errWriteRefused
 	}
 	if !sess.relogged {
 		p.logger.Info("letterboxd write was refused; signing in again", "username", sess.creds.account.Username)
@@ -588,6 +664,12 @@ func faultFor(err error) *pluginv1.WatchSyncFault {
 			SafeMessage: "Letterboxd is rate limiting requests.",
 			RetryAfter:  durationpb.New(rateLimit.RetryAfter),
 		}
+	case errors.Is(err, errCookieNotOwner):
+		return newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL,
+			"That cookie is not signed in as this Letterboxd username. Check the username and copy the cookie again.")
+	case errors.Is(err, errCookieInvalid):
+		return newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL,
+			"Letterboxd does not accept this cookie; connect Letterboxd again with a new one.")
 	case errors.Is(err, letterboxd.ErrLoginRejected):
 		return newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL,
 			"Letterboxd rejected the username or password.")

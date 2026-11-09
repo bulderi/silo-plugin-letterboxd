@@ -11,6 +11,7 @@ import (
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 
 	"github.com/bulderi/silo-plugin-letterboxd/internal/fakesite"
+	"github.com/bulderi/silo-plugin-letterboxd/letterboxd"
 )
 
 var testFilms = []fakesite.Film{
@@ -89,17 +90,48 @@ func newHarness(t *testing.T, opts ...func(*Options)) *harness {
 	return &harness{t: t, site: site, store: store, p: New(o)}
 }
 
+// connect stores a password connection the way versions before 0.4.0 did, so
+// the tests that use it prove those stored connections keep working.
 func (h *harness) connect() {
+	h.t.Helper()
+	creds, err := h.p.signIn(context.Background(), h.site.Username(), h.site.Password())
+	if err != nil {
+		h.t.Fatalf("connect: %v", err)
+	}
+	h.creds = creds.proto()
+}
+
+// connectCookie connects the way a new connection does and returns the cookie.
+func (h *harness) connectCookie() string {
+	h.t.Helper()
+	cookie := h.site.IssueRememberCookie()
+	resp := h.exchange(h.site.Username(), cookie)
+	if resp.GetFault() != nil {
+		h.t.Fatalf("connect: %v", resp.GetFault())
+	}
+	h.creds = resp.GetCredentials()
+	return cookie
+}
+
+func (h *harness) exchange(username, apiKey string) *pluginv1.WatchSyncCredentialResponse {
 	h.t.Helper()
 	resp, err := h.p.ExchangeAPIKey(context.Background(), &pluginv1.WatchSyncExchangeAPIKeyRequest{
 		CapabilityId:   "letterboxd",
-		ProviderConfig: &pluginv1.WatchSyncProviderConfig{Values: map[string]string{ConnectionUsernameKey: h.site.Username()}},
-		ApiKey:         h.site.Password(),
+		ProviderConfig: &pluginv1.WatchSyncProviderConfig{Values: map[string]string{ConnectionUsernameKey: username}},
+		ApiKey:         apiKey,
 	})
-	if err != nil || resp.GetFault() != nil {
-		h.t.Fatalf("connect: %v %v", err, resp.GetFault())
+	if err != nil {
+		h.t.Fatal(err)
 	}
-	h.creds = resp.GetCredentials()
+	return resp
+}
+
+// assertNoSignIn fails if anything touched the Cloudflare-protected sign-in.
+func (h *harness) assertNoSignIn() {
+	h.t.Helper()
+	if n := h.site.CountRequests("GET /sign-in/") + h.site.CountRequests("POST /user/login.do"); n != 0 {
+		h.t.Fatalf("%d requests reached the sign-in page: %v", n, h.site.Requests())
+	}
 }
 
 func (h *harness) authContext() *pluginv1.WatchSyncAuthenticatedContext {
@@ -186,58 +218,352 @@ const (
 	opRemove = pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_REMOVE_FROM_WATCHLIST
 )
 
-func TestExchangeAPIKey(t *testing.T) {
+func TestExchangeAPIKeyStoresTheCookie(t *testing.T) {
 	h := newHarness(t)
-	resp, err := h.p.ExchangeAPIKey(context.Background(), &pluginv1.WatchSyncExchangeAPIKeyRequest{
-		ProviderConfig: &pluginv1.WatchSyncProviderConfig{Values: map[string]string{ConnectionUsernameKey: h.site.Email()}},
-		ApiKey:         h.site.Password(),
-	})
-	if err != nil || resp.GetFault() != nil {
-		t.Fatalf("%v %v", err, resp.GetFault())
+	h.site.SetWatchlist("aA1")
+	cookie := h.site.IssueRememberCookie()
+	resp := h.exchange(h.site.Username(), "letterboxd.user="+cookie)
+	if resp.GetFault() != nil {
+		t.Fatal(resp.GetFault())
 	}
+	h.assertNoSignIn()
 	if got := resp.GetAccount(); got.GetUsername() != h.site.Username() || got.GetExternalSubject() != h.site.Username() {
-		t.Fatalf("account = %v, want the canonical username even for an email login", got)
+		t.Fatalf("account = %v", got)
 	}
 	creds := resp.GetCredentials()
-	if creds.GetAccessToken() == "" || creds.GetRefreshToken() == "" {
-		t.Fatalf("credentials missing session cookies: %v", creds)
+	// Silo refuses credentials without an access token.
+	if creds.GetAccessToken() != cookie || creds.GetRefreshToken() != cookie {
+		t.Fatalf("access = %q, refresh = %q, want the cookie in both", creds.GetAccessToken(), creds.GetRefreshToken())
 	}
-	if attrs := creds.GetSecretAttributes(); attrs[attrUsername] != h.site.Username() || attrs[attrLogin] != h.site.Email() || attrs[attrPassword] != h.site.Password() {
-		t.Fatal("credentials must carry username, login and password for re-login")
+	attrs := creds.GetSecretAttributes()
+	if attrs[attrUsername] != h.site.Username() {
+		t.Fatalf("username attribute = %q", attrs[attrUsername])
+	}
+	if _, ok := attrs[attrPassword]; ok {
+		t.Fatal("a cookie connection must store no password")
+	}
+	if _, ok := attrs[attrLogin]; ok {
+		t.Fatal("a cookie connection must store no login")
+	}
+	stored, ok := credentialsFromContext(&pluginv1.WatchSyncAuthenticatedContext{Credentials: creds})
+	if !ok || stored.session.Remember != cookie {
+		t.Fatalf("stored = %+v, ok = %v", stored, ok)
+	}
+	if stored.session.Current != "" {
+		t.Fatal("the remember-me cookie must not be sent as the session cookie")
 	}
 }
 
 func TestExchangeAPIKeyFaults(t *testing.T) {
-	h := newHarness(t)
+	const (
+		invalidRequest    = pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST
+		invalidCredential = pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL
+		rateLimited       = pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_RATE_LIMITED
+	)
 	cases := []struct {
 		name     string
 		username string
-		password string
-		setup    func()
+		apiKey   string
+		setup    func(*fakesite.Site)
 		want     pluginv1.WatchSyncFaultCode
 	}{
-		{"missing username", "", "hunter22", nil, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST},
-		{"missing password", "samplemember", " ", nil, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST},
-		{"wrong password", "samplemember", "wrong", nil, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL},
-		{"challenge", "samplemember", "correct horse", func() { h.site.Challenge("/sign-in/", true) }, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_RATE_LIMITED},
+		{"missing username", "", "cookie-value", nil, invalidRequest},
+		{"missing cookie", "samplemember", " ", nil, invalidRequest},
+		{"email instead of username", "samplemember@example.com", "cookie-value", nil, invalidRequest},
+		{"dot segment as username", "..", "cookie-value", nil, invalidRequest},
+		{"profile address as username", "https://letterboxd.com/samplemember/", "cookie-value", nil, invalidRequest},
+		{"whole cookie header", "samplemember", "a=b; letterboxd.user=cookie-value", nil, invalidRequest},
+		{"the session cookie", "samplemember", "letterboxd.user.CURRENT=cookie-value", nil, invalidRequest},
+		{"dead cookie or a pasted password", "samplemember", "cookie-value", nil, invalidCredential},
+		{"challenge", "samplemember", "cookie-value", func(s *fakesite.Site) { s.Challenge("/settings/", true) }, rateLimited},
 	}
 	for _, tc := range cases {
-		if tc.setup != nil {
-			tc.setup()
-		}
-		resp, err := h.p.ExchangeAPIKey(context.Background(), &pluginv1.WatchSyncExchangeAPIKeyRequest{
-			ProviderConfig: &pluginv1.WatchSyncProviderConfig{Values: map[string]string{ConnectionUsernameKey: tc.username}},
-			ApiKey:         tc.password,
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			if tc.setup != nil {
+				tc.setup(h.site)
+			}
+			resp := h.exchange(tc.username, tc.apiKey)
+			if resp.GetFault().GetCode() != tc.want || resp.GetCredentials() != nil {
+				t.Fatalf("fault = %v, want %v and no credentials", resp.GetFault(), tc.want)
+			}
+			if strings.Contains(resp.GetFault().GetSafeMessage(), "cookie-value") {
+				t.Fatal("fault message leaks the cookie")
+			}
+			h.assertNoSignIn()
 		})
-		if err != nil {
-			t.Fatal(err)
+	}
+}
+
+// Reads would go to the typed member's list and writes to the cookie owner's.
+func TestExchangeAPIKeyRefusesAnotherMembersCookie(t *testing.T) {
+	h := newHarness(t)
+	resp := h.exchange("someoneelse", h.site.IssueRememberCookie())
+	if resp.GetFault().GetCode() != pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL || resp.GetCredentials() != nil {
+		t.Fatalf("resp = %v", resp)
+	}
+	if !strings.Contains(resp.GetFault().GetSafeMessage(), "not signed in as") {
+		t.Fatalf("message = %q", resp.GetFault().GetSafeMessage())
+	}
+}
+
+func TestExchangeAPIKeyIgnoresUsernameCase(t *testing.T) {
+	h := newHarness(t)
+	if resp := h.exchange("SampleMember", h.site.IssueRememberCookie()); resp.GetFault() != nil {
+		t.Fatal(resp.GetFault())
+	}
+}
+
+func TestCookieConnectionReadsAndWrites(t *testing.T) {
+	h := newHarness(t)
+	h.site.SetPageSize(2)
+	h.site.SetPrivate(true)
+	h.site.SetWatchlist("gG7", "bB2", "cC3")
+	h.connectCookie()
+
+	items, _, fault := h.listAll()
+	if fault != nil || strings.Join(keys(items), ",") != "letterboxd:gG7,letterboxd:bB2,letterboxd:cC3" {
+		t.Fatalf("items %v fault %v", keys(items), fault)
+	}
+	resp := h.apply(
+		movieEvent("add", opAdd, "tmdb:5550001", map[string]string{"tmdb": "5550001"}),
+		movieEvent("remove", opRemove, "letterboxd:bB2", nil),
+	)
+	if resp.GetFault() != nil {
+		t.Fatal(resp.GetFault())
+	}
+	for _, r := range resp.GetResults() {
+		if r.GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
+			t.Errorf("%s: %v", r.GetEventId(), r)
 		}
-		if resp.GetFault().GetCode() != tc.want || resp.GetCredentials() != nil {
-			t.Errorf("%s: fault = %v, want %v and no credentials", tc.name, resp.GetFault(), tc.want)
+	}
+	if got := strings.Join(h.site.Watchlist(), ","); got != "aA1,gG7,cC3" {
+		t.Fatalf("watchlist = %s", got)
+	}
+	h.assertNoSignIn()
+}
+
+// A cookie connection cannot sign in again to replace a stale CSRF token, so
+// each call loads a fresh one, and doing so is no reason to rewrite the
+// stored credentials.
+func TestCookieConnectionLoadsAFreshCSRFForEachCall(t *testing.T) {
+	h := newHarness(t)
+	h.connectCookie()
+	if _, ok := h.creds.GetSecretAttributes()[attrCSRF]; ok {
+		t.Fatal("a cookie connection must store no CSRF token")
+	}
+	for i, film := range []string{"aA1", "bB2"} {
+		resp := h.apply(movieEvent(film, opAdd, "letterboxd:"+film, nil))
+		if resp.GetFault() != nil || resp.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
+			t.Fatalf("resp = %v", resp)
 		}
-		if strings.Contains(resp.GetFault().GetSafeMessage(), tc.password) && strings.TrimSpace(tc.password) != "" {
-			t.Errorf("%s: fault message leaks the password", tc.name)
+		if resp.GetUpdatedCredentials() != nil {
+			t.Fatalf("call %d rewrote unchanged credentials: %v", i, resp.GetUpdatedCredentials())
 		}
+		frontPages := 0
+		for _, request := range h.site.Requests() {
+			if request == "GET /" {
+				frontPages++
+			}
+		}
+		if frontPages != i+1 {
+			t.Fatalf("after call %d: %d front page loads, want one per call", i, frontPages)
+		}
+	}
+}
+
+func TestCookieExpiredOnPrivateRead(t *testing.T) {
+	h := newHarness(t)
+	h.site.SetPrivate(true)
+	h.site.SetWatchlist("aA1")
+	h.connectCookie()
+	h.site.ExpireSessions()
+	items, _, fault := h.listAll()
+	if fault.GetCode() != pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL || items != nil {
+		t.Fatalf("fault = %v, items = %v", fault, keys(items))
+	}
+	if !strings.Contains(fault.GetSafeMessage(), "new one") {
+		t.Fatalf("message = %q, want it to ask for a new cookie", fault.GetSafeMessage())
+	}
+	h.assertNoSignIn()
+}
+
+func TestCookieExpiredOnPublicReadStillReads(t *testing.T) {
+	h := newHarness(t)
+	h.site.SetWatchlist("aA1")
+	h.connectCookie()
+	h.site.ExpireSessions()
+	if items, _, fault := h.listAll(); fault != nil || len(items) != 1 {
+		t.Fatalf("items %v fault %v", keys(items), fault)
+	}
+}
+
+func TestCookieExpiredOnWrite(t *testing.T) {
+	h := newHarness(t)
+	h.site.SetWatchlist("cC3")
+	h.connectCookie()
+	h.site.ExpireSessions()
+	resp := h.apply(
+		movieEvent("1", opAdd, "letterboxd:aA1", nil),
+		movieEvent("2", opAdd, "letterboxd:bB2", nil),
+	)
+	if resp.GetFault().GetCode() != pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL {
+		t.Fatalf("fault = %v, want INVALID_CREDENTIAL", resp.GetFault())
+	}
+	if !strings.Contains(resp.GetFault().GetSafeMessage(), "new one") {
+		t.Fatalf("message = %q, want it to ask for a new cookie", resp.GetFault().GetSafeMessage())
+	}
+	if got := strings.Join(h.site.Watchlist(), ","); got != "cC3" {
+		t.Fatalf("watchlist = %s", got)
+	}
+	h.assertNoSignIn()
+}
+
+// One film the site refuses says nothing about the cookie when another write
+// in the batch went through, in either order.
+func TestCookieRefusedFilmDoesNotFailBatch(t *testing.T) {
+	for _, order := range [][]string{{"aA1", "bB2"}, {"bB2", "aA1"}} {
+		h := newHarness(t)
+		h.connectCookie()
+		h.site.RefuseWrite("aA1", true)
+		resp := h.apply(
+			movieEvent(order[0], opAdd, "letterboxd:"+order[0], nil),
+			movieEvent(order[1], opAdd, "letterboxd:"+order[1], nil),
+		)
+		if resp.GetFault() != nil {
+			t.Fatalf("order %v: fault %v", order, resp.GetFault())
+		}
+		got := map[string]pluginv1.WatchSyncApplyStatus{}
+		for _, r := range resp.GetResults() {
+			got[r.GetEventId()] = r.GetStatus()
+		}
+		if got["aA1"] != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_RETRY ||
+			got["bB2"] != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
+			t.Fatalf("order %v: statuses = %v", order, got)
+		}
+		h.assertNoSignIn()
+	}
+}
+
+// A film refused on its own says nothing about a cookie that still works.
+func TestCookieLoneRefusedFilmKeepsConnection(t *testing.T) {
+	h := newHarness(t)
+	h.connectCookie()
+	h.site.RefuseWrite("aA1", true)
+	resp := h.apply(movieEvent("1", opAdd, "letterboxd:aA1", nil))
+	if resp.GetFault() != nil || resp.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_RETRY {
+		t.Fatalf("resp = %v", resp)
+	}
+	if n := h.site.CountRequests("PATCH /api/v0/me/watchlist/" + letterboxd.ProbeLID); n != 1 {
+		t.Fatalf("cookie checks = %d, want 1", n)
+	}
+	if len(h.site.Watchlist()) != 0 {
+		t.Fatalf("the check changed the watchlist: %v", h.site.Watchlist())
+	}
+}
+
+// A cookie check that cannot finish is no proof the cookie died.
+func TestCookieFailedCheckKeepsConnection(t *testing.T) {
+	h := newHarness(t)
+	h.connectCookie()
+	h.site.ExpireSessions()
+	h.site.Challenge("/api/v0/me/watchlist/"+letterboxd.ProbeLID, true)
+	resp := h.apply(movieEvent("1", opAdd, "letterboxd:aA1", nil))
+	if resp.GetFault() != nil || resp.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_RETRY {
+		t.Fatalf("resp = %v", resp)
+	}
+}
+
+// A rate limit is not evidence that the cookie died.
+func TestCookieRefusalThenRateLimitKeepsConnection(t *testing.T) {
+	h := newHarness(t)
+	h.connectCookie()
+	h.site.RefuseWrite("aA1", true)
+	h.site.RateLimit("/api/v0/me/watchlist/bB2", true)
+	resp := h.apply(
+		movieEvent("1", opAdd, "letterboxd:aA1", nil),
+		movieEvent("2", opAdd, "letterboxd:bB2", nil),
+	)
+	if resp.GetFault() != nil || len(resp.GetResults()) != 2 {
+		t.Fatalf("resp = %v", resp)
+	}
+	if n := h.site.CountRequests("PATCH /api/v0/me/watchlist/" + letterboxd.ProbeLID); n != 0 {
+		t.Fatalf("cookie checks = %d during a rate limit, want 0", n)
+	}
+}
+
+func TestCookieRotationIsPersisted(t *testing.T) {
+	h := newHarness(t)
+	old := h.connectCookie()
+	h.site.RotateRememberOnWrite(true)
+	resp := h.apply(movieEvent("1", opAdd, "letterboxd:aA1", nil))
+	updated := resp.GetUpdatedCredentials()
+	if updated.GetRefreshToken() == "" || updated.GetRefreshToken() == old || updated.GetAccessToken() != updated.GetRefreshToken() {
+		t.Fatalf("access = %q, refresh = %q, want the new cookie in both", updated.GetAccessToken(), updated.GetRefreshToken())
+	}
+	h.site.RotateRememberOnWrite(false)
+	second := h.apply(movieEvent("2", opAdd, "letterboxd:bB2", nil))
+	if second.GetFault() != nil || second.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
+		t.Fatalf("write with the rotated cookie: %v", second)
+	}
+}
+
+// If the site does start setting a session cookie, it takes over the access
+// token and the remember-me cookie stays the refresh token.
+func TestCookieConnectionKeepsANewSessionCookie(t *testing.T) {
+	h := newHarness(t)
+	cookie := h.connectCookie()
+	h.site.RotateSessionOnWrite(true)
+	resp := h.apply(movieEvent("1", opAdd, "letterboxd:aA1", nil))
+	updated := resp.GetUpdatedCredentials()
+	if updated.GetAccessToken() == "" || updated.GetAccessToken() == cookie || updated.GetRefreshToken() != cookie {
+		t.Fatalf("access = %q, refresh = %q", updated.GetAccessToken(), updated.GetRefreshToken())
+	}
+	if _, ok := updated.GetSecretAttributes()[attrPassword]; ok {
+		t.Fatal("updated credentials must not gain a password")
+	}
+}
+
+func TestRefreshCookieConnectionReturnsWhatItHas(t *testing.T) {
+	h := newHarness(t)
+	cookie := h.connectCookie()
+	before := len(h.site.Requests())
+	resp, err := h.p.RefreshCredentials(context.Background(), &pluginv1.WatchSyncRefreshCredentialsRequest{Context: h.authContext()})
+	if err != nil || resp.GetFault() != nil {
+		t.Fatalf("refresh = %v, %v", resp, err)
+	}
+	if resp.GetCredentials().GetAccessToken() != cookie || resp.GetCredentials().GetRefreshToken() != cookie {
+		t.Fatalf("credentials = %v", resp.GetCredentials())
+	}
+	if resp.GetAccount().GetUsername() != h.site.Username() {
+		t.Fatalf("account = %v", resp.GetAccount())
+	}
+	if len(h.site.Requests()) != before {
+		t.Fatal("refreshing a cookie connection must not contact Letterboxd")
+	}
+}
+
+// Password connections stored by earlier versions still carry what re-login
+// needs, including the canonical username for an email login.
+func TestStoredPasswordConnection(t *testing.T) {
+	h := newHarness(t)
+	creds, err := h.p.signIn(context.Background(), h.site.Email(), h.site.Password())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.account.Username != h.site.Username() {
+		t.Fatalf("username = %q, want the canonical name for an email login", creds.account.Username)
+	}
+	proto := creds.proto()
+	if proto.GetAccessToken() == "" || proto.GetRefreshToken() == "" {
+		t.Fatalf("credentials missing session cookies: %v", proto)
+	}
+	if attrs := proto.GetSecretAttributes(); attrs[attrUsername] != h.site.Username() || attrs[attrLogin] != h.site.Email() || attrs[attrPassword] != h.site.Password() {
+		t.Fatal("credentials must carry username, login and password for re-login")
+	}
+	stored, ok := credentialsFromContext(&pluginv1.WatchSyncAuthenticatedContext{Credentials: proto})
+	if !ok || stored.session.Current != creds.session.Current || stored.session.Remember != creds.session.Remember {
+		t.Fatalf("stored = %+v, ok = %v", stored, ok)
 	}
 }
 

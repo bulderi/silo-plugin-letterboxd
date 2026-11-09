@@ -23,13 +23,18 @@ const (
 // account is what the plugin needs to act for one Letterboxd member. The host
 // stores it encrypted in the connection's credential bundle.
 type account struct {
-	// Username is the member's canonical username as the site reports it
-	// after sign-in, which is what watchlist URLs use.
+	// Username is the member's username, which is what watchlist URLs use.
 	Username string
-	// Login is what the user typed to sign in (username or email).
+	// Login and Password exist only on connections made before the plugin
+	// switched to cookies. A cookie connection has neither and cannot sign in
+	// again by itself.
 	Login    string
 	Password string
 }
+
+// canSignIn reports whether the connection can sign in again by itself, which
+// only a connection from before the switch to cookies can.
+func (a account) canSignIn() bool { return a.Password != "" }
 
 // credentials is the stored form of a connection.
 type credentials struct {
@@ -51,32 +56,43 @@ func credentialsFromContext(ctx *pluginv1.WatchSyncAuthenticatedContext) (creden
 	if acc.Login == "" {
 		acc.Login = acc.Username
 	}
-	if acc.Username == "" || acc.Password == "" {
+	current, remember := stored.GetAccessToken(), stored.GetRefreshToken()
+	if current == remember {
+		// proto stored the remember-me cookie twice; there is no session cookie.
+		current = ""
+	}
+	if acc.Username == "" || (!acc.canSignIn() && current == "" && remember == "") {
 		return credentials{}, false
 	}
 	return credentials{
 		account: acc,
 		session: letterboxd.Session{
-			Current:  stored.GetAccessToken(),
-			Remember: stored.GetRefreshToken(),
+			Current:  current,
+			Remember: remember,
 			CSRF:     attrs[attrCSRF],
 		},
 	}, true
 }
 
 // proto builds the bundle the host persists. The access token is the session
-// cookie; the refresh token is the remember-me cookie.
+// cookie and the refresh token the remember-me cookie. Silo refuses a bundle
+// without an access token and the site sets no session cookie for a request
+// carrying only the remember-me cookie, so that cookie then fills both fields.
 func (c credentials) proto() *pluginv1.WatchSyncCredentials {
-	attrs := map[string]string{
-		attrUsername: c.account.Username,
-		attrLogin:    c.account.Login,
-		attrPassword: c.account.Password,
+	attrs := map[string]string{attrUsername: c.account.Username}
+	if c.account.canSignIn() {
+		attrs[attrLogin] = c.account.Login
+		attrs[attrPassword] = c.account.Password
 	}
 	if c.session.CSRF != "" {
 		attrs[attrCSRF] = c.session.CSRF
 	}
+	access := c.session.Current
+	if access == "" {
+		access = c.session.Remember
+	}
 	return &pluginv1.WatchSyncCredentials{
-		AccessToken:      c.session.Current,
+		AccessToken:      access,
 		RefreshToken:     c.session.Remember,
 		TokenType:        tokenType,
 		SecretAttributes: attrs,

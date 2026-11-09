@@ -59,23 +59,26 @@ type Site struct {
 	// URL is the base URL to point a client at.
 	URL string
 
-	mu        sync.Mutex
-	username  string
-	email     string
-	password  string
-	films     map[string]Film // by slug
-	watchlist []string        // LIDs, newest first
-	pageSize  int
-	private   bool
-	sessions  map[string]bool
-	sessionN  int
-	rotate    bool
-	challenge map[string]bool
-	rateLimit map[string]bool
-	refused   map[string]bool
-	missing   map[string]bool
-	reported  *int
-	requests  []string
+	mu             sync.Mutex
+	username       string
+	email          string
+	password       string
+	films          map[string]Film // by slug
+	watchlist      []string        // LIDs, newest first
+	pageSize       int
+	private        bool
+	sessions       map[string]bool
+	sessionN       int
+	rotate         bool
+	remembered     map[string]bool
+	rememberN      int
+	rotateRemember bool
+	challenge      map[string]bool
+	rateLimit      map[string]bool
+	refused        map[string]bool
+	missing        map[string]bool
+	reported       *int
+	requests       []string
 }
 
 // New starts a fake site for member "samplemember" (email
@@ -83,17 +86,18 @@ type Site struct {
 func New(t testing.TB) *Site {
 	t.Helper()
 	s := &Site{
-		t:         t,
-		username:  "samplemember",
-		email:     "samplemember@example.com",
-		password:  "correct horse",
-		films:     map[string]Film{},
-		pageSize:  28,
-		sessions:  map[string]bool{},
-		challenge: map[string]bool{},
-		rateLimit: map[string]bool{},
-		refused:   map[string]bool{},
-		missing:   map[string]bool{},
+		t:          t,
+		username:   "samplemember",
+		email:      "samplemember@example.com",
+		password:   "correct horse",
+		films:      map[string]Film{},
+		pageSize:   28,
+		sessions:   map[string]bool{},
+		remembered: map[string]bool{},
+		challenge:  map[string]bool{},
+		rateLimit:  map[string]bool{},
+		refused:    map[string]bool{},
+		missing:    map[string]bool{},
 	}
 	s.srv = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.srv.Close)
@@ -148,8 +152,26 @@ func (s *Site) SetPassword(p string) { s.mu.Lock(); s.password = p; s.mu.Unlock(
 // RotateSessionOnWrite makes every watchlist write issue a new session cookie.
 func (s *Site) RotateSessionOnWrite(on bool) { s.mu.Lock(); s.rotate = on; s.mu.Unlock() }
 
-// ExpireSessions signs every session out.
-func (s *Site) ExpireSessions() { s.mu.Lock(); s.sessions = map[string]bool{}; s.mu.Unlock() }
+// RotateRememberOnWrite makes every watchlist write replace the remember-me
+// cookie it was sent.
+func (s *Site) RotateRememberOnWrite(on bool) { s.mu.Lock(); s.rotateRemember = on; s.mu.Unlock() }
+
+// ExpireSessions signs every session and remember-me cookie out.
+func (s *Site) ExpireSessions() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = map[string]bool{}
+	s.remembered = map[string]bool{}
+}
+
+// IssueRememberCookie returns a remember-me cookie as if the member had signed
+// in with a browser. Like the real site, a request carrying only this cookie
+// is signed in but gets no session or signed-in-as cookie.
+func (s *Site) IssueRememberCookie() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.newRemember()
+}
 
 // Challenge makes a path answer with a Cloudflare challenge (or stop, on=false).
 func (s *Site) Challenge(path string, on bool) { s.mu.Lock(); s.challenge[path] = on; s.mu.Unlock() }
@@ -211,6 +233,8 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/":
 		s.writePage(w, signedIn, "Letterboxd", `<body class="home"></body>`)
+	case path == "/settings/":
+		s.settingsPage(w, signedIn)
 	case path == "/sign-in/":
 		_, _ = w.Write(Fixture(s.t, "signin.html"))
 	case path == "/user/login.do" && r.Method == http.MethodPost:
@@ -228,9 +252,29 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// settingsPage answers 200 to everyone, like the real site, and shows the
+// username in a form field only to a signed-in member.
+func (s *Site) settingsPage(w http.ResponseWriter, signedIn bool) {
+	body := `<body class="settings"></body>`
+	if signedIn {
+		body = `<body class="settings"><form><input name="username" value="` + s.username + `"></form></body>`
+	}
+	s.writePage(w, signedIn, "Settings", body)
+}
+
 func (s *Site) signedIn(r *http.Request) bool {
-	c, err := r.Cookie(sessionCookie)
-	return err == nil && s.sessions[c.Value]
+	if c, err := r.Cookie(sessionCookie); err == nil && s.sessions[c.Value] {
+		return true
+	}
+	c, err := r.Cookie(rememberCookie)
+	return err == nil && s.remembered[c.Value]
+}
+
+func (s *Site) newRemember() string {
+	s.rememberN++
+	value := "remember-" + strconv.Itoa(s.rememberN)
+	s.remembered[value] = true
+	return value
 }
 
 func (s *Site) newSession(w http.ResponseWriter) {
@@ -252,7 +296,7 @@ func (s *Site) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.newSession(w)
-	http.SetCookie(w, &http.Cookie{Name: rememberCookie, Value: "remember-" + strconv.Itoa(s.sessionN), Path: "/"})
+	http.SetCookie(w, &http.Cookie{Name: rememberCookie, Value: s.newRemember(), Path: "/"})
 	http.SetCookie(w, &http.Cookie{Name: signedInCookie, Value: s.username, Path: "/"})
 	_, _ = io.WriteString(w, `{"result":"success","messages":[]}`)
 }
@@ -377,9 +421,16 @@ func (s *Site) patchWatchlist(w http.ResponseWriter, r *http.Request, lid string
 	}
 	s.watchlist = kept
 	if s.rotate {
-		c, _ := r.Cookie(sessionCookie)
-		delete(s.sessions, c.Value)
+		if c, err := r.Cookie(sessionCookie); err == nil {
+			delete(s.sessions, c.Value)
+		}
 		s.newSession(w)
+	}
+	if s.rotateRemember {
+		if c, err := r.Cookie(rememberCookie); err == nil {
+			delete(s.remembered, c.Value)
+		}
+		http.SetCookie(w, &http.Cookie{Name: rememberCookie, Value: s.newRemember(), Path: "/"})
 	}
 	w.Header().Set("content-type", "application/json;charset=UTF-8")
 	_, _ = io.WriteString(w, `{}`)

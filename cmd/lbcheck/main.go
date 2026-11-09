@@ -1,13 +1,15 @@
 // Command lbcheck checks, against the live site and with the plugin's own
-// client, that this machine can sign in to Letterboxd, read the watchlist, and
-// optionally add and remove one film. Run it on the Silo host when the sync
-// misbehaves.
+// client, that this machine can use a Letterboxd cookie to read the watchlist
+// and optionally add and remove one film. Run it on the Silo host when the
+// sync misbehaves. With LETTERBOXD_PASSWORD instead of the cookie it tries the
+// password sign-in that connections from before version 0.4.0 use.
 //
 // It never prints the password or cookie values. With -write it refuses a
 // film that is already on the watchlist and removes the film it added.
 //
-//	LETTERBOXD_USERNAME=... LETTERBOXD_PASSWORD=... go run ./cmd/lbcheck
-//	LETTERBOXD_USERNAME=... LETTERBOXD_PASSWORD=... go run ./cmd/lbcheck -write -tmdb 11
+//	read -rs LETTERBOXD_COOKIE; export LETTERBOXD_COOKIE
+//	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck
+//	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -write -tmdb 11
 package main
 
 import (
@@ -31,10 +33,11 @@ func main() {
 	debug = flag.Bool("debug", false, "after sign-in, show the page's person script with values redacted")
 	flag.Parse()
 
-	login := strings.TrimSpace(os.Getenv("LETTERBOXD_USERNAME"))
+	username := strings.TrimSpace(os.Getenv("LETTERBOXD_USERNAME"))
 	password := os.Getenv("LETTERBOXD_PASSWORD")
-	if login == "" || password == "" {
-		fail("set LETTERBOXD_USERNAME and LETTERBOXD_PASSWORD")
+	rawCookie := os.Getenv("LETTERBOXD_COOKIE")
+	if username == "" || (password == "" && rawCookie == "") {
+		fail("set LETTERBOXD_USERNAME and LETTERBOXD_COOKIE (or LETTERBOXD_PASSWORD)")
 	}
 	if *write && *tmdbID <= 0 {
 		fail("-write needs -tmdb with a movie that is not on the watchlist")
@@ -46,19 +49,33 @@ func main() {
 		fail("%v", err)
 	}
 
-	step("sign in")
-	if err := client.Login(ctx, login, password); err != nil {
-		fail("%v", err)
+	if rawCookie != "" {
+		cookie, ok := letterboxd.ParseRememberCookie(rawCookie)
+		if !ok {
+			fail("LETTERBOXD_COOKIE is not the value of the letterboxd.user cookie")
+		}
+		step("load front page with the cookie")
+		client.SetSession(letterboxd.Session{Remember: cookie})
+		if err := client.Home(ctx); err != nil {
+			fail("%v", err)
+		}
+		if !*write {
+			fmt.Println("   only -write proves the cookie works")
+		}
+	} else {
+		step("sign in")
+		if err := client.Login(ctx, username, password); err != nil {
+			fail("%v", err)
+		}
+		if username = client.SignedInAs(); username == "" {
+			fail("sign-in set no letterboxd.signed.in.as cookie")
+		}
+		fmt.Printf("   signed in as %s\n", username)
 	}
 	if *debug {
-		debugPage(ctx, client, "/", login)
-		debugPage(ctx, client, letterboxd.WatchlistPath(login), login)
+		debugPage(ctx, client, "/", username)
+		debugPage(ctx, client, letterboxd.WatchlistPath(username), username)
 	}
-	username := client.SignedInAs()
-	if username == "" {
-		fail("sign-in set no letterboxd.signed.in.as cookie")
-	}
-	fmt.Printf("   signed in as %s\n", username)
 
 	step("read watchlist")
 	lids, err := readWatchlist(ctx, client, username)

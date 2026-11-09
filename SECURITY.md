@@ -15,11 +15,12 @@ CSRF tokens; replace them with placeholders.
 
 ## What the plugin handles
 
-- **Credentials.** Silo stores each connection's Letterboxd username, password,
-  and session cookies encrypted and passes them to the plugin only for the
-  duration of a call. The plugin keeps the password only to sign in again when
-  a session expires, and never writes it, the cookies, or page contents to logs
-  or error messages.
+- **Credentials.** Silo stores each connection's Letterboxd username and
+  cookies encrypted and passes them to the plugin only for the duration of a
+  call. The `letterboxd.user` cookie gives full access to the account. A
+  connection made before version 0.4.0 also holds a password, used only to sign
+  in again when a session expires. The plugin never writes the password, the
+  cookies, or page contents to logs or error messages.
 - **Network access.** The plugin talks only to `letterboxd.com`.
 - **Stored data.** The plugin's own instance state holds a cache of public film
   identifiers (Letterboxd film ID, TMDB and IMDb IDs, title, year), never

@@ -8,7 +8,7 @@ series in the Silo watchlist are left alone.
 - **Capability:** `watch_sync_provider.v1`, id `letterboxd`
 
 Letterboxd has no public API for this, so the plugin uses the website the way a
-signed-in browser does, with a Chrome TLS fingerprint because sign-in sits
+signed-in browser does, with a Chrome TLS fingerprint because the site sits
 behind Cloudflare. A change on Letterboxd's side can break it until the plugin
 is updated.
 
@@ -69,19 +69,24 @@ Letterboxd again.
 
 ## Setup
 
-1. In a profile's watch-provider settings, connect **Letterboxd**: the username
-   or email goes in the username field, the Letterboxd password in the field
-   Silo labels **API key**. The plugin has no server-wide settings.
-2. Turn on **Sync watchlist removals**. Silo imports before it sends pending
+1. Sign in at letterboxd.com in a browser and copy the value of the
+   `letterboxd.user` cookie. In Chrome it is under **Developer Tools →
+   Application → Cookies → https://letterboxd.com**. Do not copy
+   `letterboxd.user.CURRENT`.
+2. In a profile's watch-provider settings, connect **Letterboxd**: your username
+   goes in the username field, not your email, and the cookie value in the
+   field Silo labels **API key**. The plugin has no server-wide settings.
+3. Turn on **Sync watchlist removals**. Silo imports before it sends pending
    local removals, so with removal sync off, a film removed in Silo comes back
    on the next sync while it is still on Letterboxd.
-3. **Mirror watchlist order** keeps Silo in Letterboxd's order. Titles that are
+4. **Mirror watchlist order** keeps Silo in Letterboxd's order. Titles that are
    not on Letterboxd, such as series, sort after the films.
 
-Silo stores the username and password encrypted with the profile's connection.
-The plugin keeps the password only to sign in again when the Letterboxd session
-expires, and keeps it, the session cookies, and page contents out of every log
-line and error message it returns.
+Silo stores the username and cookie encrypted with the profile's connection.
+The cookie gives full access to the Letterboxd account, so treat it like a
+password. The plugin keeps it and page contents out of every log line and error
+message it returns. Signing out of Letterboxd in that browser can end the
+cookie. When Letterboxd stops accepting it, connect again with a new one.
 
 The first sync looks up every watchlisted film once, at about 1.5 seconds per
 film. A manual sync stops after Silo's 10-minute limit; the next sync continues
@@ -112,12 +117,24 @@ from the cache, and later syncs take seconds.
   entries for 30. The cache is written back only once it has been read, so a
   restart while the host store is unreachable cannot overwrite it.
 - **Writes** are convergent desired-state updates, so a retried event is
-  harmless. A write refused right after a fresh sign-in is retried later for
-  that film only; it does not mark the connection as needing a new password.
-- **Sessions.** The session cookie is stored as the access token, the
-  remember-me cookie as the refresh token, and the CSRF cookie with the account,
-  so a write needs no extra page load. A rotated cookie or a fresh sign-in is
-  returned to Silo as updated credentials.
+  harmless.
+- **Sessions.** A new connection stores the `letterboxd.user` cookie and never
+  opens the sign-in page, which sits behind a Cloudflare challenge. The cookie
+  is stored as both the access and refresh token until the site sets a session
+  cookie. Each write call loads the front page once for a fresh CSRF cookie,
+  because the plugin cannot sign in again to replace a stale one. A rotated
+  cookie is returned to Silo as updated credentials.
+- **Cookie checks.** A new connection is accepted only if the Letterboxd
+  settings page shows that the cookie is signed in as the given username, which
+  rejects a dead cookie, another member's cookie, and a pasted password. When a
+  write is refused, a write for a film that cannot exist shows whether the
+  cookie still works without changing anything: a working cookie gets the film
+  retried, a dead one reports the connection as needing a new cookie. A public
+  watchlist reads fine with a dead cookie, so a cookie that dies later shows at
+  the next write.
+- **Connections made before 0.4.0** used a password and keep working. They sign
+  in again when their session expires, and a Cloudflare challenge on that
+  sign-in pauses the sync.
 
 ### Rate limits
 
@@ -135,16 +152,23 @@ and a 429 for its `Retry-After`. The plugin never tries to solve a challenge.
 ## Troubleshooting
 
 `cmd/lbcheck` runs the plugin's client from the command line and shows whether a
-machine can sign in, read the watchlist, and write:
+machine can read the watchlist and write with a cookie:
 
 ```sh
-LETTERBOXD_USERNAME=... LETTERBOXD_PASSWORD=... go run ./cmd/lbcheck
-LETTERBOXD_USERNAME=... LETTERBOXD_PASSWORD=... go run ./cmd/lbcheck -write -tmdb 11
+read -rs LETTERBOXD_COOKIE; export LETTERBOXD_COOKIE
+LETTERBOXD_USERNAME=... go run ./cmd/lbcheck
+LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -write -tmdb 11
 ```
 
+`read -rs` asks for the cookie without showing it, which keeps it out of the
+shell history.
+
 `-write` adds the given movie and removes it again, and refuses a movie that is
-already on the watchlist. `-debug` shows how the site's pages describe the
-session after sign-in, with every value but the username redacted.
+already on the watchlist. Without it, `cmd/lbcheck` does not prove that the
+cookie works. `-debug` shows how the site's pages
+describe the session, with every value but the username redacted. With
+`LETTERBOXD_PASSWORD` instead of the cookie, `cmd/lbcheck` tries the password
+sign-in.
 
 ## Development
 

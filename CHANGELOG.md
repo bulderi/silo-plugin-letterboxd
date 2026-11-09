@@ -3,6 +3,18 @@
 Notable changes to the Letterboxd watch-provider plugin. Versions follow
 `version` in `manifest.json`; each release is tagged `v<version>`.
 
+## 0.4.0 — 2026-11-09
+
+- New connections use the browser's `letterboxd.user` cookie instead of a
+  password, because a Cloudflare challenge now blocks the sign-in page. The
+  username is still required, and an email address no longer works in its place.
+- A new connection is accepted only if the cookie is signed in as the given
+  username.
+- When Letterboxd stops accepting the cookie, Silo asks for a new one.
+- The client refuses a redirect that leaves letterboxd.com or HTTPS.
+- Connections made with a password keep working until they are reconnected.
+- `cmd/lbcheck` takes `LETTERBOXD_COOKIE`.
+
 ## 0.3.1 — 2026-11-09
 
 - Fixes known vulnerabilities by building with Go 1.26.10 and updating `grpc`,

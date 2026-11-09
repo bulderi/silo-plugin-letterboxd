@@ -1,6 +1,6 @@
 {
   "plugin_id": "bulderi.letterboxd",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "supported_platforms": [
@@ -34,16 +34,16 @@
       "config_schema": [
         {
           "key": "account",
-          "title": "Sign in to Letterboxd",
-          "description": "Letterboxd has no API keys. Enter your username or email here, and your Letterboxd password in the box labeled API key below. Silo stores both encrypted; the password is only used to sign in again when the session expires. Only the watchlist syncs; the other options on this page have no effect for Letterboxd.",
+          "title": "Connect to Letterboxd",
+          "description": "Letterboxd blocks sign-ins from servers, so the plugin uses a cookie from your browser. Sign in at letterboxd.com, copy the value of the letterboxd.user cookie, and paste it in the box labeled API key below. Enter your username here, not your email. Silo stores both encrypted. When Letterboxd stops accepting the cookie, connect again with a new one. Only the watchlist syncs; the other options on this page have no effect for Letterboxd.",
           "json_schema": "{\"type\":\"object\",\"required\":[\"username\"],\"properties\":{\"username\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":254}},\"additionalProperties\":false}",
           "required": true,
           "admin_form": {
             "fields": [
               {
                 "key": "username",
-                "label": "Username or email",
-                "description": "The name you sign in to letterboxd.com with.",
+                "label": "Username",
+                "description": "The name in your profile address, letterboxd.com/<username>/.",
                 "control": "ADMIN_FORM_CONTROL_TEXT",
                 "placeholder": "username",
                 "required": true
@@ -59,7 +59,7 @@
     "display_name": "Letterboxd Watch Provider",
     "summary": "Sync a Silo profile's watchlist with a Letterboxd watchlist, movies only.",
     "description_markdown": "Imports the Letterboxd watchlist into Silo in Letterboxd's order, sends watchlist adds and removals made in Silo back to Letterboxd, and leaves series alone. Letterboxd has no public API for this, so the plugin uses the website the way a signed-in browser does.",
-    "setup_markdown": "Each Silo profile connects with its own Letterboxd account: the username or email goes in the connection's username field, and the Letterboxd password in the field Silo labels API key. Silo stores both encrypted. The plugin needs no server-wide settings.\n\nTurn on **Sync watchlist removals** so a film removed on one side is removed on the other. The first sync looks up every watchlisted film once, at about 1.5 seconds per film; later syncs take seconds.",
+    "setup_markdown": "Each Silo profile connects with its own Letterboxd account. Sign in at letterboxd.com in a browser and copy the value of the `letterboxd.user` cookie. Your username goes in the connection's username field and the cookie value in the field Silo labels API key. Silo stores both encrypted. The cookie gives full access to the account, so treat it like a password. When Letterboxd stops accepting it, connect again with a new one. The plugin needs no server-wide settings.\n\nTurn on **Sync watchlist removals** so a film removed on one side is removed on the other. The first sync looks up every watchlisted film once, at about 1.5 seconds per film; later syncs take seconds.",
     "homepage_url": "https://letterboxd.com",
     "source_url": "https://github.com/bulderi/silo-plugin-letterboxd",
     "support_url": "https://github.com/bulderi/silo-plugin-letterboxd/issues",

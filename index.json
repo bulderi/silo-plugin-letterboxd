@@ -3,7 +3,7 @@
     {
       "manifest": {
         "plugin_id": "bulderi.letterboxd",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
@@ -28,16 +28,16 @@
             "config_schema": [
               {
                 "key": "account",
-                "title": "Sign in to Letterboxd",
-                "description": "Letterboxd has no API keys. Enter your username or email here, and your Letterboxd password in the box labeled API key below. Silo stores both encrypted; the password is only used to sign in again when the session expires. Only the watchlist syncs; the other options on this page have no effect for Letterboxd.",
+                "title": "Connect to Letterboxd",
+                "description": "Letterboxd blocks sign-ins from servers, so the plugin uses a cookie from your browser. Sign in at letterboxd.com, copy the value of the letterboxd.user cookie, and paste it in the box labeled API key below. Enter your username here, not your email. Silo stores both encrypted. When Letterboxd stops accepting the cookie, connect again with a new one. Only the watchlist syncs; the other options on this page have no effect for Letterboxd.",
                 "json_schema": "{\"type\":\"object\",\"required\":[\"username\"],\"properties\":{\"username\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":254}},\"additionalProperties\":false}",
                 "required": true,
                 "admin_form": {
                   "fields": [
                     {
                       "key": "username",
-                      "label": "Username or email",
-                      "description": "The name you sign in to letterboxd.com with.",
+                      "label": "Username",
+                      "description": "The name in your profile address, letterboxd.com/\u003cusername\u003e/.",
                       "control": 1,
                       "placeholder": "username",
                       "required": true
@@ -70,7 +70,7 @@
           "display_name": "Letterboxd Watch Provider",
           "summary": "Sync a Silo profile's watchlist with a Letterboxd watchlist, movies only.",
           "description_markdown": "Imports the Letterboxd watchlist into Silo in Letterboxd's order, sends watchlist adds and removals made in Silo back to Letterboxd, and leaves series alone. Letterboxd has no public API for this, so the plugin uses the website the way a signed-in browser does.",
-          "setup_markdown": "Each Silo profile connects with its own Letterboxd account: the username or email goes in the connection's username field, and the Letterboxd password in the field Silo labels API key. Silo stores both encrypted. The plugin needs no server-wide settings.\n\nTurn on **Sync watchlist removals** so a film removed on one side is removed on the other. The first sync looks up every watchlisted film once, at about 1.5 seconds per film; later syncs take seconds.",
+          "setup_markdown": "Each Silo profile connects with its own Letterboxd account. Sign in at letterboxd.com in a browser and copy the value of the `letterboxd.user` cookie. Your username goes in the connection's username field and the cookie value in the field Silo labels API key. Silo stores both encrypted. The cookie gives full access to the account, so treat it like a password. When Letterboxd stops accepting it, connect again with a new one. The plugin needs no server-wide settings.\n\nTurn on **Sync watchlist removals** so a film removed on one side is removed on the other. The first sync looks up every watchlisted film once, at about 1.5 seconds per film; later syncs take seconds.",
           "homepage_url": "https://letterboxd.com",
           "source_url": "https://github.com/bulderi/silo-plugin-letterboxd",
           "support_url": "https://github.com/bulderi/silo-plugin-letterboxd/issues",
@@ -81,19 +81,19 @@
         }
       },
       "repo_url": "https://github.com/bulderi/silo-plugin-letterboxd",
-      "checksums_url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.3.0/checksums.txt",
+      "checksums_url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.4.0/checksums.txt",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.3.0/plugin-darwin-arm64",
-          "checksum": "c7e9129fd41e17910a7ab00f2c089893bb61a36e382657bf15fdddc95c5f45a9"
+          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.4.0/plugin-darwin-arm64",
+          "checksum": "5a8448519c61a34e811a65827de14e557c5bf0ca2918a99a6711fe9337b13a27"
         },
         "linux/amd64": {
-          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.3.0/plugin-linux-amd64",
-          "checksum": "d12f80be730aa937edd35a75ea87b61578e75265bc50512cc2ffd43beb5d5f6e"
+          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.4.0/plugin-linux-amd64",
+          "checksum": "a61520e950932d0135fc26f534f141657e22109799a7517ac256be64c87506dd"
         },
         "linux/arm64": {
-          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.3.0/plugin-linux-arm64",
-          "checksum": "eb3104aaf23ef9850cee6e624729468e9d051dd3b34724e18bf5b91bf85add51"
+          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.4.0/plugin-linux-arm64",
+          "checksum": "a1c845954685463f14f5a9784953b14db6a2c44758e7af5f308791159e4ea169"
         }
       }
     }

@@ -148,7 +148,7 @@ session after sign-in, with every value but the username redacted.
 
 ## Development
 
-The plugin builds against `silo-plugin-sdk` v0.24.0.
+The plugin builds against `silo-plugin-sdk` v0.32.1.
 
 ```sh
 make test        # go test -race ./...

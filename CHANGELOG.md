@@ -3,8 +3,11 @@
 Notable changes to the Letterboxd watch-provider plugin. Versions follow
 `version` in `manifest.json`; each release is tagged `v<version>`.
 
-## Unreleased
+## 0.3.1 — 2026-11-09
 
+- Fixes known vulnerabilities by building with Go 1.26.10 and updating `grpc`,
+  `x/net`, `x/crypto`, `x/text`, `brotli`, `klauspost/compress`, and `circl`.
+- Builds against `silo-plugin-sdk` v0.32.1.
 - Install from a plugin repository: `index.json` lists each platform binary
   with its SHA-256, so Silo installs the right binary and offers updates.
   Releases generate it and publish it on `main`.

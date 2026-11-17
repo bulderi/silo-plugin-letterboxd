@@ -159,10 +159,36 @@ func (h *harness) listAll() ([]*pluginv1.WatchSyncRemoteState, int, *pluginv1.Wa
 	return items, pages, fault
 }
 
-// listKind runs a full traversal of one state kind the way the host does and
-// returns the items and every page's warnings.
+// listKind runs a full traversal of one state kind, without a cursor, the way
+// the host does and returns the items and every page's warnings.
 func (h *harness) listKind(kind pluginv1.WatchSyncRemoteStateKind) ([]*pluginv1.WatchSyncRemoteState, int, []string, *pluginv1.WatchSyncFault) {
 	h.t.Helper()
+	r := h.listCursor(kind, "")
+	if r.fault == nil {
+		// The diary is history and never a snapshot; every list read without
+		// a cursor is one.
+		if want := kind != pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHED; r.complete != want {
+			h.t.Fatalf("complete_snapshot = %v on a %v read, want %v", r.complete, kind, want)
+		}
+	}
+	return r.items, r.pages, r.warnings, r.fault
+}
+
+type traversal struct {
+	items    []*pluginv1.WatchSyncRemoteState
+	pages    int
+	warnings []string
+	fault    *pluginv1.WatchSyncFault
+	complete bool
+	cursor   string
+}
+
+// listCursor runs a traversal with the cursor the host saved, the way the
+// host does: the snapshot mode stays the same on every page, and the next
+// cursor comes only on the last page.
+func (h *harness) listCursor(kind pluginv1.WatchSyncRemoteStateKind, cursor string) traversal {
+	h.t.Helper()
+	var r traversal
 	var warnings []string
 	var items []*pluginv1.WatchSyncRemoteState
 	token := ""
@@ -170,6 +196,7 @@ func (h *harness) listKind(kind pluginv1.WatchSyncRemoteStateKind) ([]*pluginv1.
 	for pages := 1; ; pages++ {
 		resp, err := h.p.ListRemoteState(context.Background(), &pluginv1.WatchSyncListRemoteStateRequest{
 			Context:    h.authContext(),
+			Cursor:     cursor,
 			PageToken:  token,
 			PageSize:   10,
 			StateKinds: []pluginv1.WatchSyncRemoteStateKind{kind},
@@ -178,21 +205,28 @@ func (h *harness) listKind(kind pluginv1.WatchSyncRemoteStateKind) ([]*pluginv1.
 			h.t.Fatal(err)
 		}
 		h.persist(resp.GetUpdatedCredentials())
+		r.pages = pages
 		if resp.GetFault() != nil {
-			return nil, pages, warnings, resp.GetFault()
+			r.fault = resp.GetFault()
+			return r
 		}
-		// The diary is history and never a snapshot; every list is one.
-		if want := kind != pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHED; resp.GetCompleteSnapshot() != want {
-			h.t.Fatalf("complete_snapshot = %v on a %v page, want %v", resp.GetCompleteSnapshot(), kind, want)
+		if pages > 1 && resp.GetCompleteSnapshot() != r.complete {
+			h.t.Fatal("snapshot mode changed during the traversal")
 		}
+		r.complete = resp.GetCompleteSnapshot()
 		items = append(items, resp.GetItems()...)
 		warnings = append(warnings, resp.GetWarnings()...)
 		token = resp.GetNextPageToken()
 		if token == "" {
-			if resp.GetNextCursor() != "" {
-				h.t.Fatal("unexpected cursor")
+			isWatchlist := kind == pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST
+			if isWatchlist != (resp.GetNextCursor() == "") {
+				h.t.Fatalf("next cursor %q on a %v read", resp.GetNextCursor(), kind)
 			}
-			return items, pages, warnings, nil
+			r.items, r.warnings, r.cursor = items, warnings, resp.GetNextCursor()
+			return r
+		}
+		if resp.GetNextCursor() != "" {
+			h.t.Fatal("a cursor before the last page")
 		}
 		if seen[token] {
 			h.t.Fatalf("repeated page token %q", token)

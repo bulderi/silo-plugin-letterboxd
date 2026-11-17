@@ -112,9 +112,9 @@ from the cache, and later syncs take seconds.
 |---|---|
 | Letterboxd → Silo | Every watchlist page is read with the member's session, so private watchlists work. Each film's page is read once for its TMDB and IMDb IDs, which Silo uses to match the library. |
 | Silo → Letterboxd | The Silo item's TMDB ID (or IMDb ID) is resolved through `letterboxd.com/tmdb/<id>/`, then the site's own `PATCH /api/v0/me/watchlist/<film>` sets `inWatchlist`. |
-| Letterboxd ratings → Silo | Every page of `/<member>/films/rated/.5-5/` is read; each film tile carries the member's rating. |
+| Letterboxd ratings → Silo | `/<member>/films/rated/.5-5/by/rated-date/` is read, most recently rated first; each film tile carries the member's rating. |
 | Silo ratings → Letterboxd | The film is resolved the same way, then the site's own `PATCH /api/v0/me/rate/<film>` sets `rating` in half stars, or `null` to remove it. |
-| Letterboxd diary → Silo | Every page of `/<member>/diary/films/` is read; each row is one entry with its date. |
+| Letterboxd diary → Silo | `/<member>/diary/films/` is read, newest entry first; each row is one entry with its date. |
 | Silo plays → Letterboxd diary | The film is resolved the same way, the day's diary page is checked, then the site's own `POST /api/v0/production-log-entries` logs the film for that date. |
 
 - **Complete snapshots only.** A read that fails anywhere (network, rate limit,
@@ -230,6 +230,26 @@ servers that store whole stars round on their side (see
 - Private diary entries may be missing from the day's page if Letterboxd shows
   the plugin only public ones; the plugin cannot tell.
 
+### Short reads
+
+Ratings and diary reads hand Silo a cursor, which Silo keeps with the
+connection and sends with the next read, so a sync reads only the newest pages:
+
+- **Ratings** come most recently rated first, and changing a rating moves the
+  film to the top. The cursor remembers the 20 most recently rated films and
+  their ratings, and the next read stops after the first page that holds one
+  of them unchanged. Such a read is not a snapshot, so it cannot show a rating
+  removed on Letterboxd; once a day the read is a full one, a complete
+  snapshot, which does. A short read skips a film whose page is gone, with a
+  warning; a full read fails instead, as the watchlist does.
+- **Diary** reads stop after the first page that reaches two weeks before the
+  newest entry the last read saw. An entry logged later for an older date
+  comes in with the full read once a week.
+- Silo saves the cursor only after it has taken every item of a read, and a
+  cursor the plugin cannot read means a full read. Silo also drops the cursor
+  when the connection moves to another account, and when rating import is
+  turned on.
+
 ### Rate limits
 
 The plugin sends at most one request every 1.5 seconds across all connected
@@ -256,6 +276,7 @@ read -rs LETTERBOXD_COOKIE; export LETTERBOXD_COOKIE
 LETTERBOXD_USERNAME=... go run ./cmd/lbcheck
 LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -write -tmdb 11
 LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -rate -tmdb 11
+LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -rerate -tmdb 11
 LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -log -tmdb 11
 ```
 
@@ -267,13 +288,16 @@ oldest diary entry, which changes nothing.
 already on the watchlist. `-rate` rates the given movie 3½ and then 4 stars,
 reads each rating back, and removes it; it refuses a movie that is already
 rated. Letterboxd keeps a rated movie marked watched after the rating is
-removed, so pick one you have seen. `-log` logs the given movie in the diary
+removed, so pick one you have seen. `-rerate` takes a movie you rated earlier,
+changes its rating by half a star, checks that it becomes the most recently
+rated, which the short ratings reads rely on, and sets your rating back; the
+movie then stays first in that order. `-log` logs the given movie in the diary
 for today the way the plugin does, rates the entry 3½ stars the way a later
 Silo rating would, reads it back, and then deletes the entry and the film
 rating it gave; it refuses a movie that is rated or already logged today, and
 the movie stays marked watched. The read alone also checks that the rewatch
 check reports the same rating as the ratings list. Without `-write`, `-rate`,
-or `-log`,
+`-rerate`, or `-log`,
 `cmd/lbcheck` does not prove that the cookie works. `-debug` shows how the site's pages
 describe the session, with every value but the username redacted. With
 `LETTERBOXD_PASSWORD` instead of the cookie, `cmd/lbcheck` tries the password

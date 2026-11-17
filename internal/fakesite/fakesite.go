@@ -163,8 +163,8 @@ type Rating struct {
 	Rating int // 1 to 10
 }
 
-// SetRatings replaces the member's ratings, in the order the ratings pages
-// list them.
+// SetRatings replaces the member's ratings, most recently rated first, which
+// is the order the ratings pages list them in.
 func (s *Site) SetRatings(ratings ...Rating) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -418,7 +418,7 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request) {
 	signedIn := s.signedIn(r)
 	path := r.URL.Path
 	watchlistRoot := "/" + s.username + "/watchlist/"
-	ratingsRoot := "/" + s.username + "/films/rated/.5-5/"
+	ratingsRoot := "/" + s.username + "/films/rated/.5-5/by/rated-date/"
 	diaryRoot := "/" + s.username + "/diary/films/"
 	switch {
 	case path == "/":
@@ -555,7 +555,8 @@ func (s *Site) watchlistPage(w http.ResponseWriter, path, root string, signedIn 
 	s.writePage(w, signedIn, "Watchlist", b.String())
 }
 
-// ratingsPage serves /<member>/films/rated/.5-5/ the way the real site does:
+// ratingsPage serves /<member>/films/rated/.5-5/by/rated-date/ the way the
+// real site does:
 // a heading with the number of rated films (or the empty-list message), then
 // a grid whose tiles show the member's rating. The heading carries rating
 // spans of its own, outside the grid.

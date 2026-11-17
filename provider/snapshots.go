@@ -32,6 +32,10 @@ type snapshot struct {
 	offset int
 	// plays counts each film's entries in a diary read.
 	plays map[string]int
+	// plan is how a ratings or diary read reads; cursor is what it hands
+	// back on its last page, set once every list page is read.
+	plan   readPlan
+	cursor string
 	// seq is the page number the next token must carry, so a replayed or
 	// stale token is refused.
 	seq     int

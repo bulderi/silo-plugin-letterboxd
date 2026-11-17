@@ -99,7 +99,7 @@ func TestListRatingsFailuresNeverReturnPartialLists(t *testing.T) {
 		"count too high": func(h *harness) { h.site.ReportRatedCount(4) },
 		"count too low":  func(h *harness) { h.site.ReportRatedCount(2) },
 		"second page challenged": func(h *harness) {
-			h.site.Challenge("/samplemember/films/rated/.5-5/page/2/", true)
+			h.site.Challenge("/samplemember/films/rated/.5-5/by/rated-date/page/2/", true)
 		},
 		"film page gone": func(h *harness) { h.site.RemoveFilmPage("a-long-winter") },
 	}

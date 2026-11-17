@@ -414,9 +414,10 @@ func (c *Client) FilmByExternalID(ctx context.Context, namespace, id string) (Fi
 	return film, nil
 }
 
-// RatingsPath is the first page of the films a member has rated.
+// RatingsPath is the first page of the films a member has rated, most
+// recently rated first, so a read can stop once it reaches films it has seen.
 func RatingsPath(username string) string {
-	return "/" + url.PathEscape(strings.ToLower(username)) + "/films/rated/.5-5/"
+	return "/" + url.PathEscape(strings.ToLower(username)) + "/films/rated/.5-5/by/rated-date/"
 }
 
 // RatingsPage loads one page of a member's rated films: a path from

@@ -35,6 +35,10 @@ type ListReader struct {
 	seenFilms map[string]bool
 	films     []Poster
 	total     int
+	// stop ends the read early after a page it returns true for; stopped
+	// records that it did.
+	stop    func(ListPage) bool
+	stopped bool
 }
 
 // NewWatchlistReader starts at the member's first watchlist page.
@@ -59,6 +63,14 @@ func NewListReader(kind ListKind, username string) *ListReader {
 		total:     -1,
 	}
 }
+
+// StopWhen makes the read end after the first page stop returns true for,
+// which an incremental read uses once it reaches entries it has seen. Such a
+// read is not the whole list, so Films skips the entry-count check.
+func (r *ListReader) StopWhen(stop func(ListPage) bool) { r.stop = stop }
+
+// Stopped reports whether StopWhen ended the read before the last page.
+func (r *ListReader) Stopped() bool { return r.stopped }
 
 // Kind is the list the reader reads.
 func (r *ListReader) Kind() ListKind { return r.kind }
@@ -108,6 +120,10 @@ func (r *ListReader) ReadPage(ctx context.Context, c *Client) error {
 		}
 	}
 	r.next = page.NextPath
+	if r.next != "" && r.stop != nil && r.stop(page) {
+		r.next = ""
+		r.stopped = true
+	}
 	return nil
 }
 
@@ -118,7 +134,7 @@ func (r *ListReader) Films() ([]Poster, error) {
 	if !r.Done() {
 		return nil, errors.New("letterboxd list read is not finished")
 	}
-	if r.total >= 0 && len(r.films) != r.total {
+	if !r.stopped && r.total >= 0 && len(r.films) != r.total {
 		return nil, fmt.Errorf("read %d films, site reports %d: %w", len(r.films), r.total, ErrIncompleteList)
 	}
 	return r.films, nil

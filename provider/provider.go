@@ -301,6 +301,10 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 		if snap, err = p.snapshots.start(username, kind); err != nil {
 			return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFor(err)}, nil
 		}
+		snap.plan = p.planRead(kind, req.GetCursor())
+		if snap.plan.stop != nil {
+			snap.reader.StopWhen(snap.plan.stop)
+		}
 	} else {
 		var ok bool
 		if snap, ok = p.snapshots.resume(token, username, kind); !ok {
@@ -332,10 +336,13 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 			return fail(err, noun+" read")
 		}
 		snap.films = append(make([]letterboxd.Poster, 0, len(films)), films...)
+		if kind != letterboxd.ListWatchlist {
+			snap.cursor = p.nextCursor(snap, films)
+		}
 		if kind == letterboxd.ListDiary {
 			snap.films, snap.plays = aggregateDiary(films)
 		}
-		p.logger.Info("letterboxd "+noun+" read", "username", username,
+		p.logger.Info("letterboxd "+noun+" read", "username", username, "incremental", snap.plan.incremental,
 			"films", len(films), "pages", snap.reader.PagesRead())
 	}
 
@@ -352,9 +359,11 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 			var stale bool
 			var err error
 			film, stale, err = p.fetchPoster(ctx, sess, poster)
-			if errors.Is(err, errFilmPageMissing) && kind == letterboxd.ListDiary {
-				// A diary read is not a snapshot, so a film left out is only
-				// not imported this time.
+			if errors.Is(err, errFilmPageMissing) && (kind == letterboxd.ListDiary || snap.plan.incremental) {
+				// A diary read, or a ratings read that stopped early, is not
+				// a snapshot, so a film left out is only not imported this
+				// time. A full ratings read still fails, since Silo would read
+				// the film as unrated.
 				warnings.missing = append(warnings.missing, poster.Name)
 				snap.offset++
 				worked = true
@@ -387,13 +396,15 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 	resp := &pluginv1.WatchSyncListRemoteStateResponse{
 		Items: items,
 		// The diary is history: a play missing from a read is not a removal,
-		// and Silo never removes plays on import.
-		CompleteSnapshot:   kind != letterboxd.ListDiary,
+		// and Silo never removes plays on import. A ratings read that stopped
+		// early is not the whole list.
+		CompleteSnapshot:   kind == letterboxd.ListWatchlist || (kind == letterboxd.ListRatings && !snap.plan.incremental),
 		UpdatedCredentials: sess.updated(),
 		Warnings:           warnings.list(),
 	}
 	if snap.finished() {
 		p.snapshots.drop(snap.id)
+		resp.NextCursor = snap.cursor
 	} else {
 		resp.NextPageToken = p.snapshots.nextToken(snap)
 	}

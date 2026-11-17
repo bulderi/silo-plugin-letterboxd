@@ -53,9 +53,15 @@ func (w *pageWarnings) list() []string {
 	add(w.stale,
 		"Used saved IDs for 1 film whose Letterboxd page was not found",
 		"Used saved IDs for %d films whose Letterboxd page was not found")
-	add(w.missing,
-		"Skipped the diary entries of 1 film whose Letterboxd page was not found",
-		"Skipped the diary entries of %d films whose Letterboxd page was not found")
+	if w.kind == letterboxd.ListRatings {
+		add(w.missing,
+			"Skipped the rating of 1 film whose Letterboxd page was not found",
+			"Skipped the ratings of %d films whose Letterboxd page was not found")
+	} else {
+		add(w.missing,
+			"Skipped the diary entries of 1 film whose Letterboxd page was not found",
+			"Skipped the diary entries of %d films whose Letterboxd page was not found")
+	}
 	return out
 }
 

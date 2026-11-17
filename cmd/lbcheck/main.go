@@ -18,6 +18,7 @@
 //	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck
 //	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -write -tmdb 11
 //	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -rate -tmdb 11
+//	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -rerate -tmdb 11
 //	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -log -tmdb 11
 package main
 
@@ -38,6 +39,7 @@ import (
 func main() {
 	write := flag.Bool("write", false, "also add the -tmdb film to the watchlist and remove it again")
 	rate := flag.Bool("rate", false, "also rate the -tmdb film, read the rating back, and remove it (the film stays marked watched)")
+	rerate := flag.Bool("rerate", false, "change the rating of the already rated -tmdb film by half a star, check it becomes the most recently rated, and set the old rating back")
 	logEntry := flag.Bool("log", false, "also log the -tmdb film in the diary for today, rate the entry, read it back, and delete it again")
 	tmdbID := flag.Int("tmdb", 0, "TMDB id of a movie that is NOT on the watchlist (with -write) and NOT rated (with -rate)")
 	interval := flag.Duration("interval", 1500*time.Millisecond, "minimum time between requests")
@@ -50,8 +52,11 @@ func main() {
 	if username == "" || (password == "" && rawCookie == "") {
 		fail("set LETTERBOXD_USERNAME and LETTERBOXD_COOKIE (or LETTERBOXD_PASSWORD)")
 	}
-	if (*write || *rate || *logEntry) && *tmdbID <= 0 {
-		fail("-write, -rate, and -log need -tmdb with a movie that is not on the watchlist and not rated")
+	if (*write || *rate || *rerate || *logEntry) && *tmdbID <= 0 {
+		fail("-write, -rate, -rerate, and -log need -tmdb")
+	}
+	if *rate && *rerate {
+		fail("-rate needs a film that is not rated and -rerate one that is; run them separately")
 	}
 
 	ctx := context.Background()
@@ -70,8 +75,8 @@ func main() {
 		if err := client.Home(ctx); err != nil {
 			fail("%v", err)
 		}
-		if !*write && !*rate && !*logEntry {
-			fmt.Println("   only -write, -rate, or -log proves the cookie works")
+		if !*write && !*rate && !*rerate && !*logEntry {
+			fmt.Println("   only -write, -rate, -rerate, or -log proves the cookie works")
 		}
 	} else {
 		step("sign in")
@@ -111,7 +116,7 @@ func main() {
 	if len(entries) > 0 {
 		checkFilmRelation(ctx, client, entries[len(entries)-1], ratings)
 	}
-	if !*write && !*rate && !*logEntry {
+	if !*write && !*rate && !*rerate && !*logEntry {
 		fmt.Println("ok")
 		return
 	}
@@ -125,6 +130,9 @@ func main() {
 	if *write && lids[film.LID] {
 		fail("this film is already on the watchlist; pick another so nothing of yours is removed")
 	}
+	if _, rated := ratings[film.LID]; *rerate && !rated {
+		fail("-rerate needs a film you have already rated")
+	}
 	if _, rated := ratings[film.LID]; *logEntry && rated {
 		fail("-log rates the entry, which changes the film's rating; pick a film you have not rated")
 	}
@@ -133,6 +141,9 @@ func main() {
 	}
 	if *write {
 		checkWatchlistWrite(ctx, client, username, film, lids)
+	}
+	if *rerate {
+		checkRerate(ctx, client, username, film, ratings[film.LID])
 	}
 	if *rate {
 		checkRatingWrite(ctx, client, username, film, ratings)
@@ -256,21 +267,26 @@ func checkWatchlistWrite(ctx context.Context, client *letterboxd.Client, usernam
 }
 
 // checkRatingWrite rates the film 3.5 stars, then 4, reads each back, and
-// removes the rating.
+// removes the rating. Each new rating must put the film first in the
+// most-recently-rated order, which the plugin's short ratings reads rely on.
 func checkRatingWrite(ctx context.Context, client *letterboxd.Client, username string, film letterboxd.FilmPage, before map[string]int) {
 	step("rate, read back, and unrate")
 	for _, rating := range []int{7, 8} {
 		if err := client.SetRating(ctx, film.LID, film.Slug, rating); err != nil {
 			fail("rate %d: %v (check %s/film/%s/)", rating, err, letterboxd.DefaultBaseURL, film.Slug)
 		}
-		after, err := readRatings(ctx, client, username)
+		// The most recently rated film is the first on the first page.
+		page, err := client.RatingsPage(ctx, letterboxd.RatingsPath(username))
 		if err != nil {
 			fail("%v", err)
 		}
-		if after[film.LID] != rating {
-			fail("rated %d, read back %d", rating, after[film.LID])
+		if len(page.Films) == 0 || page.Films[0].LID != film.LID {
+			fail("rated %d, but the film is not the most recently rated; short ratings reads would miss the change", rating)
 		}
-		fmt.Printf("   rated %d/10, read back\n", rating)
+		if page.Films[0].Rating != rating {
+			fail("rated %d, read back %d", rating, page.Films[0].Rating)
+		}
+		fmt.Printf("   rated %d/10, read back first in the list\n", rating)
 	}
 	if err := client.SetRating(ctx, film.LID, film.Slug, 0); err != nil {
 		fail("unrate: %v (the film may still be rated: %s/film/%s/)", err, letterboxd.DefaultBaseURL, film.Slug)
@@ -283,6 +299,45 @@ func checkRatingWrite(ctx context.Context, client *letterboxd.Client, username s
 		fail("ratings changed: %d rated films before, %d after", len(before), len(after))
 	}
 	fmt.Println("   unrated")
+}
+
+// checkRerate changes an older rating by half a star and checks the film
+// becomes the most recently rated, which the plugin's short ratings reads rely
+// on to see changed ratings. It then sets the old rating back; the film stays
+// first in the most-recently-rated order.
+func checkRerate(ctx context.Context, client *letterboxd.Client, username string, film letterboxd.FilmPage, old int) {
+	step("change an older rating and set it back")
+	page, err := client.RatingsPage(ctx, letterboxd.RatingsPath(username))
+	if err != nil {
+		fail("%v", err)
+	}
+	if len(page.Films) > 0 && page.Films[0].LID == film.LID {
+		fail("this film is already the most recently rated, which proves nothing; pick an older rating")
+	}
+	changed := old + 1
+	if old == 10 {
+		changed = old - 1
+	}
+	for _, rating := range []int{changed, old} {
+		if err := client.SetRating(ctx, film.LID, film.Slug, rating); err != nil {
+			fail("rate %d: %v (your rating was %d/10: %s/film/%s/)", rating, err, old, letterboxd.DefaultBaseURL, film.Slug)
+		}
+		page, err := client.RatingsPage(ctx, letterboxd.RatingsPath(username))
+		if err != nil {
+			fail("%v (your rating was %d/10)", err, old)
+		}
+		if len(page.Films) == 0 || page.Films[0].LID != film.LID {
+			if rating == changed {
+				_ = client.SetRating(ctx, film.LID, film.Slug, old)
+			}
+			fail("rated %d, but the film did not become the most recently rated; short ratings reads would miss changed ratings until the daily full read", rating)
+		}
+		if page.Films[0].Rating != rating {
+			fail("rated %d, read back %d (your rating was %d/10)", rating, page.Films[0].Rating, old)
+		}
+		fmt.Printf("   rated %d/10, read back first in the list\n", rating)
+	}
+	fmt.Printf("   your rating is %d/10 again\n", old)
 }
 
 func readRatings(ctx context.Context, client *letterboxd.Client, username string) (map[string]int, error) {

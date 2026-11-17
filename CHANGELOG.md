@@ -23,6 +23,11 @@ Notable changes to the Letterboxd watch-provider plugin. Versions follow
   logged again.
 - `cmd/lbcheck` reads the diary, and `-log` logs one film for today, rates the
   entry, reads it back, and deletes it again.
+- Ratings and diary reads keep a cursor, so a sync reads only the newest pages.
+  A full ratings read, which shows removed ratings, runs once a day, and a full
+  diary read once a week.
+- `cmd/lbcheck -rerate` changes an older rating and sets it back, to check the
+  order the short ratings reads rely on.
 
 ## 0.4.0 — 2026-11-09
 

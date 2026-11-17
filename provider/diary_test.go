@@ -202,7 +202,7 @@ func TestDiaryStartSurvivesRestartAndIsPerAccount(t *testing.T) {
 		t.Fatalf("a play after the first start = %v, want APPLIED (the start must not move)", got)
 	}
 
-	start, err := restarted.diaryStart.since(context.Background(), "someoneelse")
+	start, err := restarted.accounts.diaryStart(context.Background(), "someoneelse")
 	if err != nil || !start.Equal(later.Truncate(time.Second)) {
 		t.Fatalf("another account's start = %v (%v), want its own first use", start, err)
 	}
@@ -270,10 +270,10 @@ func TestDiaryStartIsReadOnce(t *testing.T) {
 		playEvent("second", map[string]string{"tmdb": "5550002"}, diaryNow.Add(2*time.Hour)),
 		playEvent("third", map[string]string{"tmdb": "5550003"}, diaryNow.Add(3*time.Hour)),
 	)
-	if n := h.store.keyReads[diaryStartKey]; n != 1 {
+	if n := h.store.keyReads[accountsKey]; n != 1 {
 		t.Fatalf("the start was read %d times for three plays, want 1", n)
 	}
-	if _, ok := h.store.values[diaryStartKey]; !ok {
+	if _, ok := h.store.values[accountsKey]; !ok {
 		t.Fatal("the start was not stored")
 	}
 }
@@ -298,7 +298,7 @@ func TestDiaryLoggingIsOffUnlessTurnedOn(t *testing.T) {
 	if n := h.site.Logs(); n != 0 || h.site.CountRequests("GET /samplemember/diary/") != 0 {
 		t.Fatalf("logged %d entries or read the diary with logging off", n)
 	}
-	if _, ok := h.store.values[diaryStartKey]; ok {
+	if _, ok := h.store.values[accountsKey]; ok {
 		t.Fatal("the start was recorded while logging was off")
 	}
 

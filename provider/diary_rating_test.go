@@ -158,9 +158,8 @@ func TestLoggedEntriesSurviveRestartAndDeletion(t *testing.T) {
 	if got := h.site.Ratings()["bB2"]; got != 6 {
 		t.Fatalf("film rating = %d, want 6", got)
 	}
-	recent, err := h.p.diaryEntries.recent(t.Context(), h.site.Username(), "bB2")
-	if err != nil || len(recent) != 0 {
-		t.Fatalf("deleted entry still recorded: %v (%v)", recent, err)
+	if entry, found, err := h.p.accounts.newestEntry(t.Context(), h.site.Username(), "bB2"); err != nil || found {
+		t.Fatalf("deleted entry still recorded: %v (%v)", entry, err)
 	}
 }
 
@@ -255,9 +254,8 @@ func TestEntryGoneBeforeTheUpdate(t *testing.T) {
 	if got := h.site.Ratings()["aA1"]; got != 7 {
 		t.Fatalf("film rating = %d, want 7", got)
 	}
-	recent, err := h.p.diaryEntries.recent(t.Context(), h.site.Username(), "aA1")
-	if err != nil || len(recent) != 0 {
-		t.Fatalf("entry still recorded: %v (%v)", recent, err)
+	if entry, found, err := h.p.accounts.newestEntry(t.Context(), h.site.Username(), "aA1"); err != nil || found {
+		t.Fatalf("entry still recorded: %v (%v)", entry, err)
 	}
 }
 

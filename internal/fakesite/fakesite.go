@@ -513,21 +513,11 @@ func (s *Site) watchlistPage(w http.ResponseWriter, path, root string, signedIn 
 		_, _ = w.Write(Fixture(s.t, "forbidden.html"))
 		return
 	}
-	page := 1
-	if rest := strings.TrimPrefix(path, root+"page/"); rest != path {
-		n, err := strconv.Atoi(strings.Trim(rest, "/"))
-		if err != nil || n < 1 {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		page = n
-	}
-	start := (page - 1) * s.pageSize
-	if start > 0 && start >= len(s.watchlist) {
+	page, start, end, ok := s.pageBounds(path, root, len(s.watchlist))
+	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	end := min(start+s.pageSize, len(s.watchlist))
 	count := fmt.Sprintf(` data-num-entries="%d"`, len(s.watchlist))
 	if s.reported != nil {
 		count = ""
@@ -561,21 +551,11 @@ func (s *Site) watchlistPage(w http.ResponseWriter, path, root string, signedIn 
 // a grid whose tiles show the member's rating. The heading carries rating
 // spans of its own, outside the grid.
 func (s *Site) ratingsPage(w http.ResponseWriter, path, root string, signedIn bool) {
-	page := 1
-	if rest := strings.TrimPrefix(path, root+"page/"); rest != path {
-		n, err := strconv.Atoi(strings.Trim(rest, "/"))
-		if err != nil || n < 1 {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		page = n
-	}
-	start := (page - 1) * s.pageSize
-	if start > 0 && start >= len(s.ratingOrder) {
+	page, start, end, ok := s.pageBounds(path, root, len(s.ratingOrder))
+	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	end := min(start+s.pageSize, len(s.ratingOrder))
 	count := len(s.ratingOrder)
 	if s.ratedReported != nil {
 		count = *s.ratedReported
@@ -618,21 +598,11 @@ func (s *Site) ratingsPage(w http.ResponseWriter, path, root string, signedIn bo
 // diaryPage serves the diary like the real site: one row per entry, newest
 // first, each with its date link, film poster, and rating cell.
 func (s *Site) diaryPage(w http.ResponseWriter, path, root string, signedIn bool) {
-	page := 1
-	if rest := strings.TrimPrefix(path, root+"page/"); rest != path {
-		n, err := strconv.Atoi(strings.Trim(rest, "/"))
-		if err != nil || n < 1 {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		page = n
-	}
-	start := (page - 1) * s.pageSize
-	if start > 0 && start >= len(s.diary) {
+	page, start, end, ok := s.pageBounds(path, root, len(s.diary))
+	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	end := min(start+s.pageSize, len(s.diary))
 	next := ""
 	if end < len(s.diary) {
 		next = fmt.Sprintf(`<div class="paginate-nextprev"><a class="next" href="%spage/%d/">Older</a></div>`, root, page+1)
@@ -858,6 +828,25 @@ func (s *Site) postLogEntry(w http.ResponseWriter, r *http.Request, signedIn boo
 	}
 	w.Header().Set("content-type", "application/json;charset=UTF-8")
 	_, _ = io.WriteString(w, `{"logEntry":`+entryJSON(entry)+`,"relationship":{}}`)
+}
+
+// pageBounds reads the page number from a list path (root, or root plus
+// page/<n>/) and returns the slice of a list of total items it shows; ok is
+// false for a page that does not exist.
+func (s *Site) pageBounds(path, root string, total int) (page, start, end int, ok bool) {
+	page = 1
+	if rest := strings.TrimPrefix(path, root+"page/"); rest != path {
+		n, err := strconv.Atoi(strings.Trim(rest, "/"))
+		if err != nil || n < 1 {
+			return 0, 0, 0, false
+		}
+		page = n
+	}
+	start = (page - 1) * s.pageSize
+	if start > 0 && start >= total {
+		return 0, 0, 0, false
+	}
+	return page, start, min(start+s.pageSize, total), true
 }
 
 func thousands(n int) string {

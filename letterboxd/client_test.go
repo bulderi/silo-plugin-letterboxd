@@ -92,11 +92,11 @@ func TestSessionRestoredFromCookies(t *testing.T) {
 		t.Fatal(err)
 	}
 	second.SetSession(first.Session())
-	if _, err := second.WatchlistPage(ctx, WatchlistPath(site.Username())); err != nil {
+	if _, err := second.ListPage(ctx, ListWatchlist, ListPath(ListWatchlist, site.Username())); err != nil {
 		t.Fatalf("restored session cannot read the private watchlist: %v", err)
 	}
 	site.ExpireSessions()
-	if _, err := second.WatchlistPage(ctx, WatchlistPath(site.Username())); !errors.Is(err, ErrForbidden) {
+	if _, err := second.ListPage(ctx, ListWatchlist, ListPath(ListWatchlist, site.Username())); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expired session: err = %v, want ErrForbidden", err)
 	}
 }
@@ -106,14 +106,14 @@ func TestWatchlistPages(t *testing.T) {
 	site.SetPageSize(1)
 	site.SetWatchlist("aA1", "bB2")
 	ctx := context.Background()
-	page, err := client.WatchlistPage(ctx, WatchlistPath("SampleMember"))
+	page, err := client.ListPage(ctx, ListWatchlist, ListPath(ListWatchlist, "SampleMember"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Films) != 1 || page.Films[0].LID != "aA1" || page.NextPath == "" {
 		t.Fatalf("page 1 = %+v", page)
 	}
-	page, err = client.WatchlistPage(ctx, page.NextPath)
+	page, err = client.ListPage(ctx, ListWatchlist, page.NextPath)
 	if err != nil || len(page.Films) != 1 || page.Films[0].LID != "bB2" || page.NextPath != "" {
 		t.Fatalf("page 2 = %+v, %v", page, err)
 	}
@@ -123,27 +123,27 @@ func TestWatchlistErrors(t *testing.T) {
 	site, client := newSite(t)
 	site.SetWatchlist("aA1")
 	ctx := context.Background()
-	path := WatchlistPath(site.Username())
+	path := ListPath(ListWatchlist, site.Username())
 
 	site.SetPrivate(true)
-	if _, err := client.WatchlistPage(ctx, path); !errors.Is(err, ErrForbidden) {
+	if _, err := client.ListPage(ctx, ListWatchlist, path); !errors.Is(err, ErrForbidden) {
 		t.Errorf("private: err = %v, want ErrForbidden", err)
 	}
 	site.SetPrivate(false)
-	if _, err := client.WatchlistPage(ctx, WatchlistPath("nobody")); !errors.Is(err, ErrNotFound) {
+	if _, err := client.ListPage(ctx, ListWatchlist, ListPath(ListWatchlist, "nobody")); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing: err = %v, want ErrNotFound", err)
 	}
 	site.Challenge(path, true)
-	if _, err := client.WatchlistPage(ctx, path); !errors.Is(err, ErrChallenge) {
+	if _, err := client.ListPage(ctx, ListWatchlist, path); !errors.Is(err, ErrChallenge) {
 		t.Errorf("challenge: err = %v, want ErrChallenge", err)
 	}
 	site.Challenge(path, false)
 	site.RateLimit(path, true)
 	var rl *RateLimitError
-	if _, err := client.WatchlistPage(ctx, path); !errors.As(err, &rl) || rl.RetryAfter != 2*time.Minute {
+	if _, err := client.ListPage(ctx, ListWatchlist, path); !errors.As(err, &rl) || rl.RetryAfter != 2*time.Minute {
 		t.Errorf("rate limit: err = %v", err)
 	}
-	if _, err := client.WatchlistPage(ctx, "https://example.com/x/"); !errors.Is(err, ErrUnexpectedPage) {
+	if _, err := client.ListPage(ctx, ListWatchlist, "https://example.com/x/"); !errors.Is(err, ErrUnexpectedPage) {
 		t.Errorf("foreign path: err = %v", err)
 	}
 }
@@ -248,5 +248,27 @@ func TestThrottleReleasesCancelledSlot(t *testing.T) {
 	th.mu.Unlock()
 	if until := time.Until(next); until > time.Hour+time.Minute || until < 59*time.Minute {
 		t.Fatalf("next slot in %s, want about one interval (the cancelled slot released)", until)
+	}
+}
+
+// A kind with no list is an error, never a nil parser or a profile path.
+func TestUnknownListKind(t *testing.T) {
+	site := fakesite.New(t)
+	client, err := New(Options{BaseURL: site.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := ListKind(99)
+	if path := ListPath(unknown, site.Username()); path != "" {
+		t.Errorf("path = %q, want none", path)
+	}
+	if _, err := client.ListPage(context.Background(), unknown, "/samplemember/"); !errors.Is(err, ErrUnexpectedPage) {
+		t.Errorf("err = %v, want ErrUnexpectedPage", err)
+	}
+	if got := unknown.String(); got != "list 99" {
+		t.Errorf("String() = %q", got)
+	}
+	if n := len(site.Requests()); n != 0 {
+		t.Errorf("%d requests for an unknown list", n)
 	}
 }

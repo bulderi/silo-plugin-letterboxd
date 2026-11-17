@@ -354,25 +354,66 @@ func (c *Client) DebugPage(ctx context.Context, path string) (status int, finalP
 	return resp.status, resp.path, resp.body, cookieNames, nil
 }
 
-// WatchlistPath is the first watchlist page of a member.
-func WatchlistPath(username string) string {
-	return "/" + url.PathEscape(strings.ToLower(username)) + "/watchlist/"
+// lists is where each member list starts, relative to the member's page, and
+// how its pages read.
+var lists = map[ListKind]struct {
+	name  string
+	path  string
+	parse func([]byte) (ListPage, error)
+}{
+	ListWatchlist: {"watchlist", "/watchlist/", ParseWatchlistPage},
+	// Most recently rated first, so a read can stop once it reaches films it
+	// has seen.
+	ListRatings: {"ratings", "/films/rated/.5-5/by/rated-date/", ParseRatingsPage},
+	ListDiary:   {"diary", "/diary/films/", ParseDiaryPage},
 }
 
-// WatchlistPage loads one watchlist page: a path from WatchlistPath or a
-// previous page's NextPath. A private watchlist read without a valid session
-// is ErrForbidden.
-func (c *Client) WatchlistPage(ctx context.Context, path string) (WatchlistPage, error) {
+// String is the list's name: "watchlist", "ratings", or "diary".
+func (k ListKind) String() string {
+	if list, ok := lists[k]; ok {
+		return list.name
+	}
+	return "list " + strconv.Itoa(int(k))
+}
+
+func memberPath(username string) string {
+	return "/" + url.PathEscape(strings.ToLower(username))
+}
+
+// ListPath is the first page of a member's list of that kind, or "" for a
+// kind there is no such list for.
+func ListPath(kind ListKind, username string) string {
+	list, ok := lists[kind]
+	if !ok {
+		return ""
+	}
+	return memberPath(username) + list.path
+}
+
+// DiaryDayPath is the page of a member's diary entries for one date, which
+// reads as a diary page.
+func DiaryDayPath(username string, day time.Time) string {
+	return memberPath(username) + day.Format("/diary/films/for/2006/01/02/")
+}
+
+// ListPage loads one page of a member's list: a path from ListPath, a
+// previous page's NextPath, or for the diary DiaryDayPath. A private list
+// read without a valid session is ErrForbidden.
+func (c *Client) ListPage(ctx context.Context, kind ListKind, path string) (ListPage, error) {
+	list, ok := lists[kind]
+	if !ok {
+		return ListPage{}, fmt.Errorf("%s: %w", kind, ErrUnexpectedPage)
+	}
 	if !strings.HasPrefix(path, "/") || strings.Contains(path, "//") {
-		return WatchlistPage{}, fmt.Errorf("watchlist path %q: %w", path, ErrUnexpectedPage)
+		return ListPage{}, fmt.Errorf("%s path %q: %w", list.name, path, ErrUnexpectedPage)
 	}
 	resp, err := c.get(ctx, path, false)
 	if err != nil {
-		return WatchlistPage{}, err
+		return ListPage{}, err
 	}
-	page, err := ParseWatchlistPage(resp.body)
+	page, err := list.parse(resp.body)
 	if err != nil {
-		return WatchlistPage{}, fmt.Errorf("watchlist %s: %w", path, err)
+		return ListPage{}, fmt.Errorf("%s %s: %w", list.name, path, err)
 	}
 	return page, nil
 }
@@ -414,60 +455,10 @@ func (c *Client) FilmByExternalID(ctx context.Context, namespace, id string) (Fi
 	return film, nil
 }
 
-// RatingsPath is the first page of the films a member has rated, most
-// recently rated first, so a read can stop once it reaches films it has seen.
-func RatingsPath(username string) string {
-	return "/" + url.PathEscape(strings.ToLower(username)) + "/films/rated/.5-5/by/rated-date/"
-}
-
-// RatingsPage loads one page of a member's rated films: a path from
-// RatingsPath or a previous page's NextPath.
-func (c *Client) RatingsPage(ctx context.Context, path string) (ListPage, error) {
-	if !strings.HasPrefix(path, "/") || strings.Contains(path, "//") {
-		return ListPage{}, fmt.Errorf("ratings path %q: %w", path, ErrUnexpectedPage)
-	}
-	resp, err := c.get(ctx, path, false)
-	if err != nil {
-		return ListPage{}, err
-	}
-	page, err := ParseRatingsPage(resp.body)
-	if err != nil {
-		return ListPage{}, fmt.Errorf("ratings %s: %w", path, err)
-	}
-	return page, nil
-}
-
-// DiaryPath is the first page of a member's film diary.
-func DiaryPath(username string) string {
-	return "/" + url.PathEscape(strings.ToLower(username)) + "/diary/films/"
-}
-
-// DiaryDayPath is the page of a member's diary entries for one date.
-func DiaryDayPath(username string, day time.Time) string {
-	return "/" + url.PathEscape(strings.ToLower(username)) + day.Format("/diary/films/for/2006/01/02/")
-}
-
-// DiaryPage loads one page of a member's diary: a path from DiaryPath, a
-// previous page's NextPath, or DiaryDayPath.
-func (c *Client) DiaryPage(ctx context.Context, path string) (ListPage, error) {
-	if !strings.HasPrefix(path, "/") || strings.Contains(path, "//") {
-		return ListPage{}, fmt.Errorf("diary path %q: %w", path, ErrUnexpectedPage)
-	}
-	resp, err := c.get(ctx, path, false)
-	if err != nil {
-		return ListPage{}, err
-	}
-	page, err := ParseDiaryPage(resp.body)
-	if err != nil {
-		return ListPage{}, fmt.Errorf("diary %s: %w", path, err)
-	}
-	return page, nil
-}
-
 // DiaryHasFilm reports whether the member's diary has an entry for the film
 // on that date.
 func (c *Client) DiaryHasFilm(ctx context.Context, username, lid string, day time.Time) (bool, error) {
-	page, err := c.DiaryPage(ctx, DiaryDayPath(username, day))
+	page, err := c.ListPage(ctx, ListDiary, DiaryDayPath(username, day))
 	if err != nil {
 		return false, err
 	}
@@ -501,27 +492,9 @@ func (c *Client) FilmRelation(ctx context.Context, uid string) (Relation, error)
 	if !filmUIDPattern.MatchString(uid) {
 		return Relation{}, fmt.Errorf("film uid %q: %w", uid, ErrUnexpectedPage)
 	}
-	resp, err := c.send(ctx, request{
-		method: http.MethodGet,
-		path:   "/s/check-viewingable-relation?viewingableUID=" + url.QueryEscape(uid),
-		headers: map[string]string{
-			"accept":           "application/json, text/javascript, */*; q=0.01",
-			"x-requested-with": "XMLHttpRequest",
-		},
-	})
+	body, err := c.getJSON(ctx, "/s/check-viewingable-relation?viewingableUID="+url.QueryEscape(uid))
 	if err != nil {
 		return Relation{}, err
-	}
-	switch resp.status {
-	case http.StatusOK:
-	case http.StatusUnauthorized, http.StatusForbidden:
-		// Not ErrSignedOut: whether the session is dead is for a write and
-		// the cookie check to decide, not this read.
-		return Relation{}, ErrForbidden
-	case http.StatusNotFound:
-		return Relation{}, ErrNotFound
-	default:
-		return Relation{}, &StatusError{Method: http.MethodGet, Path: "/s/check-viewingable-relation", Status: resp.status}
 	}
 	var raw struct {
 		Result              bool     `json:"result"`
@@ -529,7 +502,7 @@ func (c *Client) FilmRelation(ctx context.Context, uid string) (Relation, error)
 		Derived             bool     `json:"isDerivedRating"`
 		EarliestViewingDate *string  `json:"earliestViewingDate"`
 	}
-	if err := json.Unmarshal(resp.body, &raw); err != nil || !raw.Result {
+	if err := json.Unmarshal(body, &raw); err != nil || !raw.Result {
 		return Relation{}, fmt.Errorf("film relation: %w", ErrUnexpectedPage)
 	}
 	var relation Relation
@@ -638,13 +611,7 @@ func (c *Client) LogFilm(ctx context.Context, lid, filmSlug string, day time.Tim
 	if err != nil {
 		return LogEntry{}, err
 	}
-	var created struct {
-		LogEntry logEntryJSON `json:"logEntry"`
-	}
-	if json.Unmarshal(raw, &created) != nil {
-		return LogEntry{}, nil
-	}
-	entry, err := created.LogEntry.entry()
+	entry, err := decodeLogEntry(raw)
 	if err != nil {
 		return LogEntry{}, nil
 	}
@@ -656,28 +623,55 @@ func (c *Client) GetLogEntry(ctx context.Context, id string) (LogEntry, error) {
 	if !ValidLID(id) {
 		return LogEntry{}, fmt.Errorf("invalid log entry id %q", id)
 	}
-	resp, err := c.send(ctx, request{
-		method:  http.MethodGet,
-		path:    "/api/v0/log-entry/" + id,
-		headers: map[string]string{"accept": "application/json"},
-	})
+	body, err := c.getJSON(ctx, "/api/v0/log-entry/"+id)
 	if err != nil {
 		return LogEntry{}, err
 	}
-	switch resp.status {
-	case http.StatusOK:
-	case http.StatusNotFound:
-		return LogEntry{}, ErrNotFound
-	case http.StatusUnauthorized, http.StatusForbidden:
-		return LogEntry{}, ErrForbidden
-	default:
-		return LogEntry{}, &StatusError{Method: http.MethodGet, Path: "/api/v0/log-entry/", Status: resp.status}
-	}
 	var entry logEntryJSON
-	if err := json.Unmarshal(resp.body, &entry); err != nil {
+	if err := json.Unmarshal(body, &entry); err != nil {
 		return LogEntry{}, fmt.Errorf("log entry: %w", ErrUnexpectedPage)
 	}
 	return entry.entry()
+}
+
+// decodeLogEntry reads the entry from a create or update answer, which wraps
+// it as {"logEntry": ...}.
+func decodeLogEntry(raw []byte) (LogEntry, error) {
+	var answer struct {
+		LogEntry logEntryJSON `json:"logEntry"`
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		return LogEntry{}, fmt.Errorf("log entry answer: %w", ErrUnexpectedPage)
+	}
+	return answer.LogEntry.entry()
+}
+
+// getJSON reads one of the site's JSON answers. A refusal is ErrForbidden,
+// not ErrSignedOut: whether the session is dead is for a write and the cookie
+// check to decide, not a read.
+func (c *Client) getJSON(ctx context.Context, path string) ([]byte, error) {
+	resp, err := c.send(ctx, request{
+		method: http.MethodGet,
+		path:   path,
+		headers: map[string]string{
+			"accept":           "application/json, text/javascript, */*; q=0.01",
+			"x-requested-with": "XMLHttpRequest",
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	switch resp.status {
+	case http.StatusOK:
+		return resp.body, nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return nil, ErrForbidden
+	case http.StatusNotFound:
+		return nil, ErrNotFound
+	default:
+		path, _, _ = strings.Cut(path, "?")
+		return nil, &StatusError{Method: http.MethodGet, Path: path, Status: resp.status}
+	}
 }
 
 // SetLogEntryRating sets a plain entry's rating (1 to 10, or 0 to clear it),
@@ -701,13 +695,7 @@ func (c *Client) SetLogEntryRating(ctx context.Context, entry LogEntry, rating i
 	if err != nil {
 		return LogEntry{}, err
 	}
-	var updated struct {
-		LogEntry logEntryJSON `json:"logEntry"`
-	}
-	if err := json.Unmarshal(raw, &updated); err != nil {
-		return LogEntry{}, fmt.Errorf("log entry answer: %w", ErrUnexpectedPage)
-	}
-	return updated.LogEntry.entry()
+	return decodeLogEntry(raw)
 }
 
 // DeleteLogEntry removes a diary entry. The plugin never removes entries;

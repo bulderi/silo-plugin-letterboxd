@@ -60,10 +60,9 @@ type Provider struct {
 	now        func() time.Time
 	cache      *filmCache
 	snapshots  *snapshotStore
-	diaryStart *diaryStart
-	// diaryEntries are the diary entries the plugin logged recently.
-	diaryEntries *diaryEntries
-	location     *time.Location
+	// accounts is what the plugin keeps per Letterboxd account.
+	accounts *accountStore
+	location *time.Location
 }
 
 // New creates a Provider.
@@ -85,16 +84,15 @@ func New(opts Options) *Provider {
 		location = time.Local
 	}
 	return &Provider{
-		location:     location,
-		diaryStart:   newDiaryStart(opts.Store, now),
-		diaryEntries: newDiaryEntries(opts.Store, now),
-		baseURL:      opts.BaseURL,
-		throttle:     opts.Throttle,
-		pageBudget:   budget,
-		logger:       logger,
-		now:          now,
-		cache:        newFilmCache(opts.Store, now),
-		snapshots:    newSnapshotStore(30*time.Minute, now),
+		location:   location,
+		accounts:   newAccountStore(opts.Store, now),
+		baseURL:    opts.BaseURL,
+		throttle:   opts.Throttle,
+		pageBudget: budget,
+		logger:     logger,
+		now:        now,
+		cache:      newFilmCache(opts.Store, now),
+		snapshots:  newSnapshotStore(30*time.Minute, now),
 	}
 }
 
@@ -286,7 +284,7 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST,
 			"Letterboxd sync provides the watchlist, ratings, and diary, one at a time.")}, nil
 	}
-	noun := listNoun(kind)
+	noun := kind.String()
 	sess, fault := p.openSession(req.GetContext())
 	if fault != nil {
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: fault}, nil
@@ -418,7 +416,7 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 func (p *Provider) readListPage(ctx context.Context, sess *session, reader *letterboxd.ListReader) error {
 	err := reader.ReadPage(ctx, sess.client)
 	if errors.Is(err, letterboxd.ErrForbidden) && reader.PagesRead() == 0 && !sess.relogged {
-		p.logger.Info("letterboxd "+listNoun(reader.Kind())+" was refused; signing in again", "username", sess.creds.account.Username)
+		p.logger.Info("letterboxd "+reader.Kind().String()+" was refused; signing in again", "username", sess.creds.account.Username)
 		if err := sess.relogin(ctx); err != nil {
 			return err
 		}
@@ -758,17 +756,6 @@ func listKind(kinds []pluginv1.WatchSyncRemoteStateKind) (letterboxd.ListKind, b
 		return letterboxd.ListDiary, true
 	default:
 		return 0, false
-	}
-}
-
-func listNoun(kind letterboxd.ListKind) string {
-	switch kind {
-	case letterboxd.ListRatings:
-		return "ratings"
-	case letterboxd.ListDiary:
-		return "diary"
-	default:
-		return "watchlist"
 	}
 }
 

@@ -90,7 +90,7 @@ func main() {
 	}
 	if *debug {
 		debugPage(ctx, client, "/", username)
-		debugPage(ctx, client, letterboxd.WatchlistPath(username), username)
+		debugPage(ctx, client, letterboxd.ListPath(letterboxd.ListWatchlist, username), username)
 	}
 
 	step("read watchlist")
@@ -108,7 +108,7 @@ func main() {
 	fmt.Printf("   %d rated films\n", len(ratings))
 
 	step("read diary")
-	entries, err := readDiary(ctx, client, username)
+	entries, err := readList(ctx, client, letterboxd.ListDiary, username)
 	if err != nil {
 		fail("%v", err)
 	}
@@ -210,16 +210,6 @@ func checkDiaryWrite(ctx context.Context, client *letterboxd.Client, username st
 	fmt.Println("   deleted the entry and the film rating; the film stays marked watched")
 }
 
-func readDiary(ctx context.Context, client *letterboxd.Client, username string) ([]letterboxd.Poster, error) {
-	reader := letterboxd.NewListReader(letterboxd.ListDiary, username)
-	for !reader.Done() {
-		if err := reader.ReadPage(ctx, client); err != nil {
-			return nil, err
-		}
-	}
-	return reader.Films()
-}
-
 // checkFilmRelation asks the Log form's question about the film of the
 // oldest diary entry, without writing anything. Its earliest entry must exist
 // and be no later than that entry, or the rewatch flag would be wrong, and its
@@ -276,7 +266,7 @@ func checkRatingWrite(ctx context.Context, client *letterboxd.Client, username s
 			fail("rate %d: %v (check %s/film/%s/)", rating, err, letterboxd.DefaultBaseURL, film.Slug)
 		}
 		// The most recently rated film is the first on the first page.
-		page, err := client.RatingsPage(ctx, letterboxd.RatingsPath(username))
+		page, err := client.ListPage(ctx, letterboxd.ListRatings, letterboxd.ListPath(letterboxd.ListRatings, username))
 		if err != nil {
 			fail("%v", err)
 		}
@@ -307,7 +297,7 @@ func checkRatingWrite(ctx context.Context, client *letterboxd.Client, username s
 // first in the most-recently-rated order.
 func checkRerate(ctx context.Context, client *letterboxd.Client, username string, film letterboxd.FilmPage, old int) {
 	step("change an older rating and set it back")
-	page, err := client.RatingsPage(ctx, letterboxd.RatingsPath(username))
+	page, err := client.ListPage(ctx, letterboxd.ListRatings, letterboxd.ListPath(letterboxd.ListRatings, username))
 	if err != nil {
 		fail("%v", err)
 	}
@@ -322,7 +312,7 @@ func checkRerate(ctx context.Context, client *letterboxd.Client, username string
 		if err := client.SetRating(ctx, film.LID, film.Slug, rating); err != nil {
 			fail("rate %d: %v (your rating was %d/10: %s/film/%s/)", rating, err, old, letterboxd.DefaultBaseURL, film.Slug)
 		}
-		page, err := client.RatingsPage(ctx, letterboxd.RatingsPath(username))
+		page, err := client.ListPage(ctx, letterboxd.ListRatings, letterboxd.ListPath(letterboxd.ListRatings, username))
 		if err != nil {
 			fail("%v (your rating was %d/10)", err, old)
 		}
@@ -338,42 +328,6 @@ func checkRerate(ctx context.Context, client *letterboxd.Client, username string
 		fmt.Printf("   rated %d/10, read back first in the list\n", rating)
 	}
 	fmt.Printf("   your rating is %d/10 again\n", old)
-}
-
-func readRatings(ctx context.Context, client *letterboxd.Client, username string) (map[string]int, error) {
-	reader := letterboxd.NewListReader(letterboxd.ListRatings, username)
-	for !reader.Done() {
-		if err := reader.ReadPage(ctx, client); err != nil {
-			return nil, err
-		}
-	}
-	films, err := reader.Films()
-	if err != nil {
-		return nil, err
-	}
-	ratings := make(map[string]int, len(films))
-	for _, film := range films {
-		ratings[film.LID] = film.Rating
-	}
-	return ratings, nil
-}
-
-func readWatchlist(ctx context.Context, client *letterboxd.Client, username string) (map[string]bool, error) {
-	reader := letterboxd.NewWatchlistReader(username)
-	for !reader.Done() {
-		if err := reader.ReadPage(ctx, client); err != nil {
-			return nil, err
-		}
-	}
-	films, err := reader.Films()
-	if err != nil {
-		return nil, err
-	}
-	lids := make(map[string]bool, len(films))
-	for _, film := range films {
-		lids[film.LID] = true
-	}
-	return lids, nil
 }
 
 var (
@@ -428,4 +382,33 @@ func step(name string) { fmt.Println(name) }
 func fail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "FAIL: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+// readList reads a whole list the way the plugin does.
+func readList(ctx context.Context, client *letterboxd.Client, kind letterboxd.ListKind, username string) ([]letterboxd.Poster, error) {
+	reader := letterboxd.NewListReader(kind, username)
+	for !reader.Done() {
+		if err := reader.ReadPage(ctx, client); err != nil {
+			return nil, err
+		}
+	}
+	return reader.Films()
+}
+
+func readWatchlist(ctx context.Context, client *letterboxd.Client, username string) (map[string]bool, error) {
+	films, err := readList(ctx, client, letterboxd.ListWatchlist, username)
+	lids := make(map[string]bool, len(films))
+	for _, film := range films {
+		lids[film.LID] = true
+	}
+	return lids, err
+}
+
+func readRatings(ctx context.Context, client *letterboxd.Client, username string) (map[string]int, error) {
+	films, err := readList(ctx, client, letterboxd.ListRatings, username)
+	ratings := make(map[string]int, len(films))
+	for _, film := range films {
+		ratings[film.LID] = film.Rating
+	}
+	return ratings, err
 }

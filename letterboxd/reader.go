@@ -41,23 +41,11 @@ type ListReader struct {
 	stopped bool
 }
 
-// NewWatchlistReader starts at the member's first watchlist page.
-func NewWatchlistReader(username string) *ListReader {
-	return NewListReader(ListWatchlist, username)
-}
-
 // NewListReader starts at the first page of the member's list of that kind.
 func NewListReader(kind ListKind, username string) *ListReader {
-	start := WatchlistPath(username)
-	switch kind {
-	case ListRatings:
-		start = RatingsPath(username)
-	case ListDiary:
-		start = DiaryPath(username)
-	}
 	return &ListReader{
 		kind:      kind,
-		next:      start,
+		next:      ListPath(kind, username),
 		seenPaths: map[string]bool{},
 		seenFilms: map[string]bool{},
 		total:     -1,
@@ -90,16 +78,7 @@ func (r *ListReader) ReadPage(ctx context.Context, c *Client) error {
 	if r.pages >= maxListPages || r.seenPaths[r.next] {
 		return errors.New("letterboxd list pagination did not end")
 	}
-	var page ListPage
-	var err error
-	switch r.kind {
-	case ListRatings:
-		page, err = c.RatingsPage(ctx, r.next)
-	case ListDiary:
-		page, err = c.DiaryPage(ctx, r.next)
-	default:
-		page, err = c.WatchlistPage(ctx, r.next)
-	}
+	page, err := c.ListPage(ctx, r.kind, r.next)
 	if err != nil {
 		return err
 	}

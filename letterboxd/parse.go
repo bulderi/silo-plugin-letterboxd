@@ -38,9 +38,6 @@ type ListPage struct {
 	Total int
 }
 
-// WatchlistPage is one page of a member's watchlist.
-type WatchlistPage = ListPage
-
 // FilmPage holds the identifiers of a film's own page.
 type FilmPage struct {
 	LID string
@@ -108,7 +105,7 @@ func TitleYear(name string) (string, int) {
 // reports zero entries; otherwise it is ErrUnexpectedPage. Reading "no films"
 // from a page that merely failed to parse would delete every synced item in
 // Silo.
-func ParseWatchlistPage(body []byte) (WatchlistPage, error) {
+func ParseWatchlistPage(body []byte) (ListPage, error) {
 	return parseListPage(body, false)
 }
 

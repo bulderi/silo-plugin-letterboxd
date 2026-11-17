@@ -18,17 +18,24 @@ type Poster struct {
 	Slug string
 	// Name is the display name including the year, e.g. "Parasite (2019)".
 	Name string
+	// Rating is the list owner's rating from 1 to 10 (half stars), shown on a
+	// ratings page, or 0 when the tile shows none.
+	Rating int
+}
+
+// ListPage is one page of a member's film list: the watchlist or the rated
+// films.
+type ListPage struct {
+	Films []Poster
+	// NextPath is the path of the next page, or "" on the last page.
+	NextPath string
+	// Total is the number of entries the whole list has, as the page reports
+	// it, or -1 when the page does not say.
+	Total int
 }
 
 // WatchlistPage is one page of a member's watchlist.
-type WatchlistPage struct {
-	Films []Poster
-	// NextPath is the path of the next (older) page, or "" on the last page.
-	NextPath string
-	// Total is the number of entries the whole watchlist has, from the
-	// page's data-num-entries attribute, or -1 when the page does not say.
-	Total int
-}
+type WatchlistPage = ListPage
 
 // FilmPage holds the identifiers of a film's own page.
 type FilmPage struct {
@@ -51,6 +58,11 @@ var (
 	shortLinkPattern = regexp.MustCompile(`https://boxd\.it/([A-Za-z0-9]+)"`)
 	nameYearPattern  = regexp.MustCompile(`^(.*\S)\s+\((\d{4})\)$`)
 	lidPattern       = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+	ratedPattern     = regexp.MustCompile(`^rated-(\d+)$`)
+	// ratedCountPattern reads "... watched 1,685 films rated between ..." from
+	// a ratings page's heading. The heading names a guest's view of the
+	// member, so it reads the same for the member signed in.
+	ratedCountPattern = regexp.MustCompile(`\bwatched\s+([\d,]+)\s+films?\b`)
 )
 
 // ErrUnexpectedPage means a page did not have the structure the parser
@@ -88,21 +100,62 @@ func TitleYear(name string) (string, int) {
 // from a page that merely failed to parse would delete every synced item in
 // Silo.
 func ParseWatchlistPage(body []byte) (WatchlistPage, error) {
-	if !IsSitePage(body) {
-		return WatchlistPage{}, ErrUnexpectedPage
+	return parseListPage(body, false)
+}
+
+// ParseRatingsPage reads one page of a member's rated films
+// (/<member>/films/rated/.5-5/): the films with the member's rating, the next
+// page link, and the number of rated films from the page heading. Every film
+// on the page must show a rating, and a page without films is an empty list
+// only when the page says the member has rated none.
+func ParseRatingsPage(body []byte) (ListPage, error) {
+	page, err := parseListPage(body, true)
+	if err != nil {
+		return ListPage{}, err
 	}
-	page := WatchlistPage{Total: -1}
+	for _, film := range page.Films {
+		if film.Rating < 1 || film.Rating > 10 {
+			return ListPage{}, ErrUnexpectedPage
+		}
+	}
+	return page, nil
+}
+
+func parseListPage(body []byte, ratings bool) (ListPage, error) {
+	if !IsSitePage(body) {
+		return ListPage{}, ErrUnexpectedPage
+	}
+	page := ListPage{Total: -1}
 	z := html.NewTokenizer(bytes.NewReader(body))
 	gridDepth := 0
 	sawGrid := false
+	// gridFilms is the number of films when the current grid item started,
+	// so a rating is only ever given to that item's own poster.
+	gridFilms := 0
+	// inHeading is inside the ratings page's <p class="ui-block-heading">. A
+	// <p> cannot hold another, so its end tag ends the heading, whatever void
+	// elements such as <br> it contains.
+	inHeading := false
+	var heading strings.Builder
 	for {
 		tt := z.Next()
 		switch tt {
 		case html.ErrorToken:
+			if ratings && page.Total < 0 {
+				if m := ratedCountPattern.FindStringSubmatch(heading.String()); m != nil {
+					if n, err := strconv.Atoi(strings.ReplaceAll(m[1], ",", "")); err == nil {
+						page.Total = n
+					}
+				}
+			}
 			if !sawGrid && page.Total != 0 {
-				return WatchlistPage{}, ErrUnexpectedPage
+				return ListPage{}, ErrUnexpectedPage
 			}
 			return page, nil
+		case html.TextToken:
+			if inHeading {
+				heading.Write(z.Text())
+			}
 		case html.StartTagToken, html.SelfClosingTagToken:
 			tok := z.Token()
 			attrs := attrMap(tok)
@@ -110,25 +163,50 @@ func ParseWatchlistPage(body []byte) (WatchlistPage, error) {
 			case tok.Data == "li" && hasClass(attrs["class"], "griditem"):
 				gridDepth++
 				sawGrid = true
+				gridFilms = len(page.Films)
 			case gridDepth > 0 && attrs["data-component-class"] == "LazyPoster":
 				poster, ok := posterFromAttrs(attrs)
 				if !ok {
-					return WatchlistPage{}, ErrUnexpectedPage
+					return ListPage{}, ErrUnexpectedPage
 				}
 				page.Films = append(page.Films, poster)
+			case ratings && gridDepth > 0 && hasClass(attrs["class"], "rating"):
+				if n, ok := ratedClass(attrs["class"]); ok && len(page.Films) == gridFilms+1 {
+					page.Films[gridFilms].Rating = n
+				}
 			case tok.Data == "a" && hasClass(attrs["class"], "next") && page.NextPath == "":
 				page.NextPath = attrs["href"]
-			case hasClass(attrs["class"], "js-watchlist-content") && page.Total < 0:
+			case !ratings && hasClass(attrs["class"], "js-watchlist-content") && page.Total < 0:
 				if n, err := strconv.Atoi(strings.TrimSpace(attrs["data-num-entries"])); err == nil && n >= 0 {
 					page.Total = n
 				}
+			case ratings && hasClass(attrs["class"], "filtered-message") && hasClass(attrs["class"], "empty-text"):
+				page.Total = 0
+			case ratings && gridDepth == 0 && tok.Data == "p" && hasClass(attrs["class"], "ui-block-heading") && tt == html.StartTagToken:
+				inHeading = true
 			}
 		case html.EndTagToken:
-			if tok := z.Token(); tok.Data == "li" && gridDepth > 0 {
+			tok := z.Token()
+			if tok.Data == "p" {
+				inHeading = false
+			}
+			if tok.Data == "li" && gridDepth > 0 {
 				gridDepth--
 			}
 		}
 	}
+}
+
+// ratedClass reads the rating from a class list such as
+// "rating -micro -darker rated-7".
+func ratedClass(classAttr string) (int, bool) {
+	for _, c := range strings.Fields(classAttr) {
+		if m := ratedPattern.FindStringSubmatch(c); m != nil {
+			n, err := strconv.Atoi(m[1])
+			return n, err == nil
+		}
+	}
+	return 0, false
 }
 
 // ParseFilmPage reads a film page's identifiers.

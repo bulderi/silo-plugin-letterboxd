@@ -1,15 +1,19 @@
 // Command lbcheck checks, against the live site and with the plugin's own
 // client, that this machine can use a Letterboxd cookie to read the watchlist
-// and optionally add and remove one film. Run it on the Silo host when the
+// and ratings, and optionally add and remove one film or rate and unrate it. Run it on the Silo host when the
 // sync misbehaves. With LETTERBOXD_PASSWORD instead of the cookie it tries the
 // password sign-in that connections from before version 0.4.0 use.
 //
 // It never prints the password or cookie values. With -write it refuses a
-// film that is already on the watchlist and removes the film it added.
+// film that is already on the watchlist and removes the film it added. With
+// -rate it refuses a film that is already rated, rates it, reads the rating
+// back, and removes it. Letterboxd marks a rated film watched and keeps it
+// watched after the rating is removed, so pick a film you have seen.
 //
 //	read -rs LETTERBOXD_COOKIE; export LETTERBOXD_COOKIE
 //	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck
 //	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -write -tmdb 11
+//	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -rate -tmdb 11
 package main
 
 import (
@@ -28,7 +32,8 @@ import (
 
 func main() {
 	write := flag.Bool("write", false, "also add the -tmdb film to the watchlist and remove it again")
-	tmdbID := flag.Int("tmdb", 0, "TMDB id of a movie that is NOT on the watchlist (with -write)")
+	rate := flag.Bool("rate", false, "also rate the -tmdb film, read the rating back, and remove it (the film stays marked watched)")
+	tmdbID := flag.Int("tmdb", 0, "TMDB id of a movie that is NOT on the watchlist (with -write) and NOT rated (with -rate)")
 	interval := flag.Duration("interval", 1500*time.Millisecond, "minimum time between requests")
 	debug = flag.Bool("debug", false, "after sign-in, show the page's person script with values redacted")
 	flag.Parse()
@@ -39,8 +44,8 @@ func main() {
 	if username == "" || (password == "" && rawCookie == "") {
 		fail("set LETTERBOXD_USERNAME and LETTERBOXD_COOKIE (or LETTERBOXD_PASSWORD)")
 	}
-	if *write && *tmdbID <= 0 {
-		fail("-write needs -tmdb with a movie that is not on the watchlist")
+	if (*write || *rate) && *tmdbID <= 0 {
+		fail("-write and -rate need -tmdb with a movie that is not on the watchlist and not rated")
 	}
 
 	ctx := context.Background()
@@ -59,8 +64,8 @@ func main() {
 		if err := client.Home(ctx); err != nil {
 			fail("%v", err)
 		}
-		if !*write {
-			fmt.Println("   only -write proves the cookie works")
+		if !*write && !*rate {
+			fmt.Println("   only -write or -rate proves the cookie works")
 		}
 	} else {
 		step("sign in")
@@ -83,7 +88,14 @@ func main() {
 		fail("%v", err)
 	}
 	fmt.Printf("   %d films\n", len(lids))
-	if !*write {
+
+	step("read ratings")
+	ratings, err := readRatings(ctx, client, username)
+	if err != nil {
+		fail("%v", err)
+	}
+	fmt.Printf("   %d rated films\n", len(ratings))
+	if !*write && !*rate {
 		fmt.Println("ok")
 		return
 	}
@@ -94,10 +106,22 @@ func main() {
 		fail("%v", err)
 	}
 	fmt.Printf("   /film/%s/ -> LID %s (TMDB %s %s)\n", film.Slug, film.LID, film.TMDBType, film.TMDBID)
-	if lids[film.LID] {
+	if *write && lids[film.LID] {
 		fail("this film is already on the watchlist; pick another so nothing of yours is removed")
 	}
+	if _, rated := ratings[film.LID]; *rate && rated {
+		fail("this film is already rated; pick another so no rating of yours is removed")
+	}
+	if *write {
+		checkWatchlistWrite(ctx, client, username, film, lids)
+	}
+	if *rate {
+		checkRatingWrite(ctx, client, username, film, ratings)
+	}
+	fmt.Println("ok")
+}
 
+func checkWatchlistWrite(ctx context.Context, client *letterboxd.Client, username string, film letterboxd.FilmPage, lids map[string]bool) {
 	step("add and remove")
 	if err := client.SetInWatchlist(ctx, film.LID, film.Slug, true); err != nil {
 		fail("add: %v", err)
@@ -114,7 +138,54 @@ func main() {
 	if after[film.LID] || len(after) != len(lids) {
 		fail("watchlist changed: %d films before, %d after", len(lids), len(after))
 	}
-	fmt.Println("ok")
+}
+
+// checkRatingWrite rates the film 3.5 stars, then 4, reads each back, and
+// removes the rating.
+func checkRatingWrite(ctx context.Context, client *letterboxd.Client, username string, film letterboxd.FilmPage, before map[string]int) {
+	step("rate, read back, and unrate")
+	for _, rating := range []int{7, 8} {
+		if err := client.SetRating(ctx, film.LID, film.Slug, rating); err != nil {
+			fail("rate %d: %v (check %s/film/%s/)", rating, err, letterboxd.DefaultBaseURL, film.Slug)
+		}
+		after, err := readRatings(ctx, client, username)
+		if err != nil {
+			fail("%v", err)
+		}
+		if after[film.LID] != rating {
+			fail("rated %d, read back %d", rating, after[film.LID])
+		}
+		fmt.Printf("   rated %d/10, read back\n", rating)
+	}
+	if err := client.SetRating(ctx, film.LID, film.Slug, 0); err != nil {
+		fail("unrate: %v (the film may still be rated: %s/film/%s/)", err, letterboxd.DefaultBaseURL, film.Slug)
+	}
+	after, err := readRatings(ctx, client, username)
+	if err != nil {
+		fail("%v", err)
+	}
+	if _, rated := after[film.LID]; rated || len(after) != len(before) {
+		fail("ratings changed: %d rated films before, %d after", len(before), len(after))
+	}
+	fmt.Println("   unrated")
+}
+
+func readRatings(ctx context.Context, client *letterboxd.Client, username string) (map[string]int, error) {
+	reader := letterboxd.NewListReader(letterboxd.ListRatings, username)
+	for !reader.Done() {
+		if err := reader.ReadPage(ctx, client); err != nil {
+			return nil, err
+		}
+	}
+	films, err := reader.Films()
+	if err != nil {
+		return nil, err
+	}
+	ratings := make(map[string]int, len(films))
+	for _, film := range films {
+		ratings[film.LID] = film.Rating
+	}
+	return ratings, nil
 }
 
 func readWatchlist(ctx context.Context, client *letterboxd.Client, username string) (map[string]bool, error) {

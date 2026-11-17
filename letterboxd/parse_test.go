@@ -2,6 +2,7 @@ package letterboxd
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/bulderi/silo-plugin-letterboxd/internal/fakesite"
@@ -148,5 +149,71 @@ func TestParseWatchlistCountAndEmptyPage(t *testing.T) {
 	page, err = ParseWatchlistPage(fixture(t, "watchlist_empty.html"))
 	if err != nil || page.Total != 0 || len(page.Films) != 0 || page.NextPath != "" {
 		t.Fatalf("empty watchlist = %+v, %v", page, err)
+	}
+}
+
+func TestParseRatingsPage(t *testing.T) {
+	page, err := ParseRatingsPage(fixture(t, "ratings_page1.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Poster{
+		{LID: "aA1", UID: "film:1001", Slug: "the-quiet-harbor", Name: "The Quiet Harbor (2019)", Rating: 7},
+		{LID: "bB2", UID: "film:1002", Slug: "northern-lights-2021", Name: "Northern Lights (2021)", Rating: 10},
+		{LID: "cC3", UID: "film:1003", Slug: "a-long-winter", Name: "A Long Winter (1998)", Rating: 1},
+	}
+	if len(page.Films) != len(want) {
+		t.Fatalf("films = %+v, want %+v (sidebar posters must be ignored)", page.Films, want)
+	}
+	for i := range want {
+		if page.Films[i] != want[i] {
+			t.Errorf("film %d = %+v, want %+v", i, page.Films[i], want[i])
+		}
+	}
+	if page.Total != 1204 {
+		t.Errorf("total = %d, want 1204 from the heading", page.Total)
+	}
+	if page.NextPath != "/samplemember/films/rated/.5-5/page/2/" {
+		t.Errorf("next = %q", page.NextPath)
+	}
+}
+
+// The site's own message for a member with no ratings is an empty list.
+func TestParseEmptyRatingsPage(t *testing.T) {
+	page, err := ParseRatingsPage(fixture(t, "ratings_empty.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Films) != 0 || page.Total != 0 || page.NextPath != "" {
+		t.Fatalf("page = %+v, want an empty list", page)
+	}
+}
+
+// A ratings page Silo cannot fully read fails: a tile without a rating, or no
+// grid without the empty-list message, could otherwise remove ratings.
+func TestParseRatingsPageFailures(t *testing.T) {
+	if _, err := ParseRatingsPage(fixture(t, "ratings_unrated_tile.html")); !errors.Is(err, ErrUnexpectedPage) {
+		t.Errorf("tile without a rating: err = %v, want ErrUnexpectedPage", err)
+	}
+	for _, name := range []string{"watchlist_nogrid.html", "watchlist_empty.html", "home_signed_out.html", "challenge.html"} {
+		if _, err := ParseRatingsPage(fixture(t, name)); !errors.Is(err, ErrUnexpectedPage) {
+			t.Errorf("%s: err = %v, want ErrUnexpectedPage", name, err)
+		}
+	}
+}
+
+// The rated count comes from the heading alone: a <br> inside it must not let
+// a later "watched N films" elsewhere on the page stand in for it.
+func TestParseRatingsPageCountStaysInTheHeading(t *testing.T) {
+	body := strings.Replace(string(fixture(t, "ratings_page1.html")),
+		"watched 1,204 films rated between", "<br>rated<br> between", 1)
+	body = strings.Replace(body, `<section class="sidebar">`,
+		`<section class="sidebar"><p class="profile-stats">Sample has watched 3 films</p>`, 1)
+	page, err := ParseRatingsPage([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != -1 {
+		t.Fatalf("total = %d, want -1: the heading gives no count", page.Total)
 	}
 }

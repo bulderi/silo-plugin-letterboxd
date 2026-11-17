@@ -65,6 +65,10 @@ type Site struct {
 	password       string
 	films          map[string]Film // by slug
 	watchlist      []string        // LIDs, newest first
+	ratings        map[string]int  // by LID, 1 to 10
+	ratingOrder    []string        // LIDs in the ratings page's order
+	ratedReported  *int
+	watched        map[string]bool // LIDs the member has marked watched
 	pageSize       int
 	private        bool
 	sessions       map[string]bool
@@ -98,6 +102,8 @@ func New(t testing.TB) *Site {
 		rateLimit:  map[string]bool{},
 		refused:    map[string]bool{},
 		missing:    map[string]bool{},
+		ratings:    map[string]int{},
+		watched:    map[string]bool{},
 	}
 	s.srv = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.srv.Close)
@@ -140,7 +146,48 @@ func (s *Site) Watchlist() []string {
 	return append([]string(nil), s.watchlist...)
 }
 
-// SetPageSize sets films per watchlist page.
+// Rating is one rated film for SetRatings.
+type Rating struct {
+	LID    string
+	Rating int // 1 to 10
+}
+
+// SetRatings replaces the member's ratings, in the order the ratings pages
+// list them.
+func (s *Site) SetRatings(ratings ...Rating) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ratings = map[string]int{}
+	s.ratingOrder = nil
+	for _, r := range ratings {
+		s.ratings[r.LID] = r.Rating
+		s.ratingOrder = append(s.ratingOrder, r.LID)
+	}
+}
+
+// Ratings returns the member's ratings by LID.
+func (s *Site) Ratings() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int, len(s.ratings))
+	for lid, r := range s.ratings {
+		out[lid] = r
+	}
+	return out
+}
+
+// Watched reports whether the member has marked a film watched.
+func (s *Site) Watched(lid string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.watched[lid]
+}
+
+// ReportRatedCount makes ratings pages report n rated films instead of the
+// real count; a negative n drops the heading from the page.
+func (s *Site) ReportRatedCount(n int) { s.mu.Lock(); s.ratedReported = &n; s.mu.Unlock() }
+
+// SetPageSize sets films per watchlist and ratings page.
 func (s *Site) SetPageSize(n int) { s.mu.Lock(); s.pageSize = n; s.mu.Unlock() }
 
 // SetPrivate makes the watchlist visible only when signed in.
@@ -230,6 +277,7 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request) {
 	signedIn := s.signedIn(r)
 	path := r.URL.Path
 	watchlistRoot := "/" + s.username + "/watchlist/"
+	ratingsRoot := "/" + s.username + "/films/rated/.5-5/"
 	switch {
 	case path == "/":
 		s.writePage(w, signedIn, "Letterboxd", `<body class="home"></body>`)
@@ -241,12 +289,16 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request) {
 		s.login(w, r)
 	case path == watchlistRoot || strings.HasPrefix(path, watchlistRoot+"page/"):
 		s.watchlistPage(w, path, watchlistRoot, signedIn)
+	case path == ratingsRoot || strings.HasPrefix(path, ratingsRoot+"page/"):
+		s.ratingsPage(w, path, ratingsRoot, signedIn)
 	case strings.HasPrefix(path, "/film/"):
 		s.filmPage(w, r, strings.Trim(strings.TrimPrefix(path, "/film/"), "/"), signedIn)
 	case strings.HasPrefix(path, "/tmdb/") || strings.HasPrefix(path, "/imdb/"):
 		s.externalRedirect(w, r, path)
 	case strings.HasPrefix(path, "/api/v0/me/watchlist/") && r.Method == http.MethodPatch:
 		s.patchWatchlist(w, r, strings.TrimPrefix(path, "/api/v0/me/watchlist/"), signedIn)
+	case strings.HasPrefix(path, "/api/v0/me/rate/") && r.Method == http.MethodPatch:
+		s.patchRating(w, r, strings.TrimPrefix(path, "/api/v0/me/rate/"), signedIn)
 	default:
 		http.NotFound(w, r)
 	}
@@ -349,6 +401,77 @@ func (s *Site) watchlistPage(w http.ResponseWriter, path, root string, signedIn 
 	s.writePage(w, signedIn, "Watchlist", b.String())
 }
 
+// ratingsPage serves /<member>/films/rated/.5-5/ the way the real site does:
+// a heading with the number of rated films (or the empty-list message), then
+// a grid whose tiles show the member's rating. The heading carries rating
+// spans of its own, outside the grid.
+func (s *Site) ratingsPage(w http.ResponseWriter, path, root string, signedIn bool) {
+	page := 1
+	if rest := strings.TrimPrefix(path, root+"page/"); rest != path {
+		n, err := strconv.Atoi(strings.Trim(rest, "/"))
+		if err != nil || n < 1 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		page = n
+	}
+	start := (page - 1) * s.pageSize
+	if start > 0 && start >= len(s.ratingOrder) {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	end := min(start+s.pageSize, len(s.ratingOrder))
+	count := len(s.ratingOrder)
+	if s.ratedReported != nil {
+		count = *s.ratedReported
+	}
+	var b strings.Builder
+	b.WriteString(`<body class="films-watched">`)
+	stars := `<span class="rating -tiny rated-1"> ½ </span> and <span class="rating -tiny rated-10"> ★★★★★ </span>`
+	switch {
+	case count < 0:
+	case count == 0:
+		b.WriteString(`<section class="ui-block-header filtered-message body-text -small  empty-text"><p class="ui-block-heading">` +
+			`<span class="replace-if-you" data-replacement="You haven’t" data-person="` + s.username + `">Sample hasn’t</span> watched any films rated between ` + stars + `.</p></section>`)
+	default:
+		films := "films"
+		if count == 1 {
+			films = "film"
+		}
+		fmt.Fprintf(&b, `<section class="ui-block-header filtered-message body-text -small "><p class="ui-block-heading">`+
+			`<span class="replace-if-you" data-replacement="You’ve" data-person="%s">Sample has</span> watched %s %s rated between %s.</p></section>`,
+			s.username, thousands(count), films, stars)
+	}
+	b.WriteString(`<ul class="grid -p70">`)
+	for _, lid := range s.ratingOrder[start:end] {
+		f, ok := s.filmByLID(lid)
+		if !ok {
+			s.t.Errorf("ratings have unknown LID %q", lid)
+			continue
+		}
+		fmt.Fprintf(&b, `<li class="griditem">%s<p class="poster-viewingdata" data-item-uid="%s"> <span class="rating -micro -darker rated-%d">★</span> </p></li>`,
+			posterDiv(f), f.UID, s.ratings[lid])
+	}
+	b.WriteString(`</ul><div class="pagination">`)
+	if end < len(s.ratingOrder) {
+		fmt.Fprintf(&b, `<div class="paginate-nextprev"><a class="next" href="%spage/%d/">Next</a></div>`, root, page+1)
+	}
+	b.WriteString(`</div></body>`)
+	s.writePage(w, signedIn, "Films", b.String())
+}
+
+func thousands(n int) string {
+	digits := strconv.Itoa(n)
+	var b strings.Builder
+	for i, d := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(d)
+	}
+	return b.String()
+}
+
 func (s *Site) filmPage(w http.ResponseWriter, r *http.Request, slug string, signedIn bool) {
 	f, ok := s.films[slug]
 	if !ok || s.missing[slug] {
@@ -434,6 +557,58 @@ func (s *Site) patchWatchlist(w http.ResponseWriter, r *http.Request, lid string
 	}
 	w.Header().Set("content-type", "application/json;charset=UTF-8")
 	_, _ = io.WriteString(w, `{}`)
+}
+
+// patchRating handles the site's rating write: {"rating":3.5} sets half
+// stars from 0.5 to 5 and marks the film watched, {"rating":null} clears it.
+func (s *Site) patchRating(w http.ResponseWriter, r *http.Request, lid string, signedIn bool) {
+	if !signedIn || r.Header.Get("x-csrf-token") != csrfValue {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write(Fixture(s.t, "forbidden.html"))
+		return
+	}
+	if _, ok := s.filmByLID(lid); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if s.refused[lid] {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	body, _ := io.ReadAll(r.Body)
+	raw, ok := strings.CutPrefix(string(body), `{"rating":`)
+	raw, ok2 := strings.CutSuffix(raw, `}`)
+	if !ok || !ok2 {
+		s.t.Errorf("PATCH rate body = %q", body)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if raw == "null" {
+		delete(s.ratings, lid)
+		s.ratingOrder = without(s.ratingOrder, lid)
+	} else {
+		stars, err := strconv.ParseFloat(raw, 64)
+		tenths := int(stars * 2)
+		if err != nil || float64(tenths) != stars*2 || tenths < 1 || tenths > 10 {
+			s.t.Errorf("PATCH rate body = %q", body)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		s.ratings[lid] = tenths
+		s.ratingOrder = append([]string{lid}, without(s.ratingOrder, lid)...)
+		s.watched[lid] = true
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func without(lids []string, lid string) []string {
+	kept := lids[:0:0]
+	for _, existing := range lids {
+		if existing != lid {
+			kept = append(kept, existing)
+		}
+	}
+	return kept
 }
 
 func (s *Site) filmByLID(lid string) (Film, bool) {

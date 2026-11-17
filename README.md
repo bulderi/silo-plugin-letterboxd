@@ -1,8 +1,9 @@
 # Letterboxd watch-provider plugin for Silo
 
-Syncs a Silo profile's watchlist with a [Letterboxd](https://letterboxd.com)
-watchlist through Silo's `watch_sync_provider.v1` plugin contract. Movies only;
-series in the Silo watchlist are left alone.
+Syncs a Silo profile's watchlist and movie ratings with a
+[Letterboxd](https://letterboxd.com) account through Silo's
+`watch_sync_provider.v1` plugin contract. Movies only; series in Silo are left
+alone.
 
 - **Plugin ID:** `bulderi.letterboxd`
 - **Capability:** `watch_sync_provider.v1`, id `letterboxd`
@@ -26,11 +27,13 @@ ignore the warnings.
   order (newest first).
 - Exports watchlist adds made in Silo to Letterboxd.
 - Removes films on the other side when watchlist removal sync is on.
+- Imports Letterboxd ratings into Silo and sends ratings set, changed, or
+  removed in Silo to Letterboxd, in half stars (see [Ratings](#ratings)).
 - Reports skipped entries (TV titles, films without a TMDB or IMDb link) as sync
   warnings that Silo shows with the sync run.
 
-Letterboxd watched history, ratings, likes, and lists are not synced, and the
-other options Silo shows on the connection have no effect for Letterboxd.
+Letterboxd watched history, likes, and lists are not synced, and the other
+options Silo shows on the connection have no effect for Letterboxd.
 
 ## Install
 
@@ -81,6 +84,9 @@ Letterboxd again.
    on the next sync while it is still on Letterboxd.
 4. **Mirror watchlist order** keeps Silo in Letterboxd's order. Titles that are
    not on Letterboxd, such as series, sort after the films.
+5. **Import ratings** and **Send ratings** turn each direction of rating sync
+   on or off. Check them on a connection made before the plugin synced
+   ratings, which may have them off.
 
 Silo stores the username and cookie encrypted with the profile's connection.
 The cookie gives full access to the Letterboxd account, so treat it like a
@@ -88,8 +94,8 @@ password. The plugin keeps it and page contents out of every log line and error
 message it returns. Signing out of Letterboxd in that browser can end the
 cookie. When Letterboxd stops accepting it, connect again with a new one.
 
-The first sync looks up every watchlisted film once, at about 1.5 seconds per
-film. A manual sync stops after Silo's 10-minute limit; the next sync continues
+The first sync looks up every watchlisted and rated film once, at about 1.5
+seconds per film. A manual sync stops after Silo's 10-minute limit; the next sync continues
 from the cache, and later syncs take seconds.
 
 ## How sync works
@@ -98,6 +104,8 @@ from the cache, and later syncs take seconds.
 |---|---|
 | Letterboxd → Silo | Every watchlist page is read with the member's session, so private watchlists work. Each film's page is read once for its TMDB and IMDb IDs, which Silo uses to match the library. |
 | Silo → Letterboxd | The Silo item's TMDB ID (or IMDb ID) is resolved through `letterboxd.com/tmdb/<id>/`, then the site's own `PATCH /api/v0/me/watchlist/<film>` sets `inWatchlist`. |
+| Letterboxd ratings → Silo | Every page of `/<member>/films/rated/.5-5/` is read; each film tile carries the member's rating. |
+| Silo ratings → Letterboxd | The film is resolved the same way, then the site's own `PATCH /api/v0/me/rate/<film>` sets `rating` in half stars, or `null` to remove it. |
 
 - **Complete snapshots only.** A read that fails anywhere (network, rate limit,
   Cloudflare challenge, a page the parser does not understand) returns a fault
@@ -136,11 +144,33 @@ from the cache, and later syncs take seconds.
   in again when their session expires, and a Cloudflare challenge on that
   sign-in pauses the sync.
 
+### Ratings
+
+Letterboxd rates in half stars from ½ to 5, and Silo and the plugin contract
+use whole numbers from 1 to 10, so a rating maps exactly: 3½ stars is 7. Silo
+servers that store whole stars round on their side (see
+[Silo-Server/silo-server#4398](https://github.com/Silo-Server/silo-server/pull/4398)).
+
+- **Reads** follow the watchlist rules: a complete snapshot of every rated
+  film, checked against the count the page heading reports ("watched 1,204
+  films rated between ½ and ★★★★★"). A tile without a rating, a short read, or
+  a page without films that does not say the member has rated none fails the
+  read, because Silo treats a film missing from a complete snapshot as unrated.
+  Letterboxd's pages do not say when a film was rated, so when both sides
+  change the same rating between syncs, Silo's wins.
+- **Writes** set the desired rating, so a retry is harmless. Removing a rating
+  that is not there, or one for a film Letterboxd does not have or lists as TV,
+  answers "no change" rather than an error, as the contract requires.
+- **Rating marks a film watched on Letterboxd.** The manifest lists movies in
+  `rating_export_requires_watched`, so Silo sends a new rating only once the
+  profile has a completed play of the film. Removing the rating leaves the film
+  marked watched on Letterboxd.
+
 ### Rate limits
 
 The plugin sends at most one request every 1.5 seconds across all connected
 accounts. Page reads and film lookups each spend at most 60 seconds per host
-page, so a large watchlist spreads over many pages instead of hitting the host's
+page, so a large watchlist or ratings list spreads over many pages instead of hitting the host's
 two-minute call limit. A Cloudflare challenge pauses the connection for an hour,
 and a 429 for its `Retry-After`. The plugin never tries to solve a challenge.
 
@@ -152,20 +182,24 @@ and a 429 for its `Retry-After`. The plugin never tries to solve a challenge.
 ## Troubleshooting
 
 `cmd/lbcheck` runs the plugin's client from the command line and shows whether a
-machine can read the watchlist and write with a cookie:
+machine can read the watchlist and ratings and write with a cookie:
 
 ```sh
 read -rs LETTERBOXD_COOKIE; export LETTERBOXD_COOKIE
 LETTERBOXD_USERNAME=... go run ./cmd/lbcheck
 LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -write -tmdb 11
+LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -rate -tmdb 11
 ```
 
 `read -rs` asks for the cookie without showing it, which keeps it out of the
 shell history.
 
 `-write` adds the given movie and removes it again, and refuses a movie that is
-already on the watchlist. Without it, `cmd/lbcheck` does not prove that the
-cookie works. `-debug` shows how the site's pages
+already on the watchlist. `-rate` rates the given movie 3½ and then 4 stars,
+reads each rating back, and removes it; it refuses a movie that is already
+rated. Letterboxd keeps a rated movie marked watched after the rating is
+removed, so pick one you have seen. Without `-write` or `-rate`,
+`cmd/lbcheck` does not prove that the cookie works. `-debug` shows how the site's pages
 describe the session, with every value but the username redacted. With
 `LETTERBOXD_PASSWORD` instead of the cookie, `cmd/lbcheck` tries the password
 sign-in.
@@ -194,7 +228,7 @@ gRPC, the way the host does.
 ```
 main.go               serve the plugin; instance-state adapter
 provider/             watch_sync_provider.v1: auth, snapshots, film cache, events, warnings
-letterboxd/           HTTP client (Chrome TLS fingerprint), HTML parsing, watchlist reader
+letterboxd/           HTTP client (Chrome TLS fingerprint), HTML parsing, list reader
 internal/fakesite/    fake letterboxd.com for tests
 cmd/lbcheck/          live diagnostics
 cmd/genindex/         writes index.json for a release (internal/catalogindex)

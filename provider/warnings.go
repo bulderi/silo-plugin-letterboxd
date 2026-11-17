@@ -9,10 +9,11 @@ import (
 // warning, so the host never cuts one off mid-title.
 const maxWarningBytes = 280
 
-// pageWarnings collects safe notes about watchlist entries a ListRemoteState
-// page left out or served from older data. The host shows them with the sync
-// run, so someone can see why a Letterboxd entry did not reach Silo.
+// pageWarnings collects safe notes about list entries a ListRemoteState page
+// left out or served from older data. The host shows them with the sync run,
+// so someone can see why a Letterboxd entry did not reach Silo.
 type pageWarnings struct {
+	ratings  bool
 	tv       []string
 	unlinked []string
 	stale    []string
@@ -29,9 +30,15 @@ func (w *pageWarnings) list() []string {
 			out = append(out, summarizeNames(fmt.Sprintf(many, len(names)), names))
 		}
 	}
-	add(w.tv,
-		"Skipped 1 Letterboxd watchlist entry listed as TV, not a movie",
-		"Skipped %d Letterboxd watchlist entries listed as TV, not movies")
+	if w.ratings {
+		add(w.tv,
+			"Skipped the rating of 1 Letterboxd film listed as TV, not a movie",
+			"Skipped the ratings of %d Letterboxd films listed as TV, not movies")
+	} else {
+		add(w.tv,
+			"Skipped 1 Letterboxd watchlist entry listed as TV, not a movie",
+			"Skipped %d Letterboxd watchlist entries listed as TV, not movies")
+	}
 	add(w.unlinked,
 		"Skipped 1 film that has no TMDB or IMDb link on Letterboxd",
 		"Skipped %d films that have no TMDB or IMDb link on Letterboxd")

@@ -145,9 +145,19 @@ func (h *harness) persist(updated *pluginv1.WatchSyncCredentials) {
 	}
 }
 
-// listAll runs a full traversal the way the host does and returns the items.
+// listAll runs a full watchlist traversal the way the host does and returns
+// the items.
 func (h *harness) listAll() ([]*pluginv1.WatchSyncRemoteState, int, *pluginv1.WatchSyncFault) {
 	h.t.Helper()
+	items, pages, _, fault := h.listKind(pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST)
+	return items, pages, fault
+}
+
+// listKind runs a full traversal of one state kind the way the host does and
+// returns the items and every page's warnings.
+func (h *harness) listKind(kind pluginv1.WatchSyncRemoteStateKind) ([]*pluginv1.WatchSyncRemoteState, int, []string, *pluginv1.WatchSyncFault) {
+	h.t.Helper()
+	var warnings []string
 	var items []*pluginv1.WatchSyncRemoteState
 	token := ""
 	seen := map[string]bool{}
@@ -156,25 +166,26 @@ func (h *harness) listAll() ([]*pluginv1.WatchSyncRemoteState, int, *pluginv1.Wa
 			Context:    h.authContext(),
 			PageToken:  token,
 			PageSize:   10,
-			StateKinds: []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST},
+			StateKinds: []pluginv1.WatchSyncRemoteStateKind{kind},
 		})
 		if err != nil {
 			h.t.Fatal(err)
 		}
 		h.persist(resp.GetUpdatedCredentials())
 		if resp.GetFault() != nil {
-			return nil, pages, resp.GetFault()
+			return nil, pages, warnings, resp.GetFault()
 		}
 		if !resp.GetCompleteSnapshot() {
-			h.t.Fatal("watchlist traversal must be a complete snapshot on every page")
+			h.t.Fatal("traversal must be a complete snapshot on every page")
 		}
 		items = append(items, resp.GetItems()...)
+		warnings = append(warnings, resp.GetWarnings()...)
 		token = resp.GetNextPageToken()
 		if token == "" {
 			if resp.GetNextCursor() != "" {
 				h.t.Fatal("unexpected cursor")
 			}
-			return items, pages, nil
+			return items, pages, warnings, nil
 		}
 		if seen[token] {
 			h.t.Fatalf("repeated page token %q", token)
@@ -857,11 +868,15 @@ func TestListRemoteStateRejectsBadRequests(t *testing.T) {
 	h.connect()
 	watchlist := []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST}
 	cases := map[string]*pluginv1.WatchSyncListRemoteStateRequest{
-		"other kind": {Context: h.authContext(), StateKinds: []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_RATING}},
-		"no kind":    {Context: h.authContext()},
-		"bad token":  {Context: h.authContext(), StateKinds: watchlist, PageToken: "nope"},
-		"old token":  {Context: h.authContext(), StateKinds: watchlist, PageToken: "0123:1"},
-		"no creds":   {Context: &pluginv1.WatchSyncAuthenticatedContext{}, StateKinds: watchlist},
+		"other kind": {Context: h.authContext(), StateKinds: []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHED}},
+		"two kinds": {Context: h.authContext(), StateKinds: []pluginv1.WatchSyncRemoteStateKind{
+			pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST,
+			pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_RATING,
+		}},
+		"no kind":   {Context: h.authContext()},
+		"bad token": {Context: h.authContext(), StateKinds: watchlist, PageToken: "nope"},
+		"old token": {Context: h.authContext(), StateKinds: watchlist, PageToken: "0123:1"},
+		"no creds":  {Context: &pluginv1.WatchSyncAuthenticatedContext{}, StateKinds: watchlist},
 	}
 	for name, req := range cases {
 		resp, err := h.p.ListRemoteState(context.Background(), req)
@@ -1211,26 +1226,29 @@ func TestFilmCacheFlushWaitsForLoad(t *testing.T) {
 func TestSnapshotLifetimeAndTokens(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	store := newSnapshotStore(30*time.Minute, func() time.Time { return now })
-	snap, err := store.start("samplemember")
+	snap, err := store.start("samplemember", letterboxd.ListWatchlist)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first := store.nextToken(snap)
-	if _, ok := store.resume(first, "someoneelse"); ok {
+	if _, ok := store.resume(first, "someoneelse", letterboxd.ListWatchlist); ok {
 		t.Fatal("another account resumed the snapshot")
+	}
+	if _, ok := store.resume(first, "samplemember", letterboxd.ListRatings); ok {
+		t.Fatal("a ratings traversal resumed a watchlist snapshot")
 	}
 	for i := 0; i < 3; i++ { // in use for 60 minutes in total
 		now = now.Add(20 * time.Minute)
-		if _, ok := store.resume(first, "samplemember"); !ok {
+		if _, ok := store.resume(first, "samplemember", letterboxd.ListWatchlist); !ok {
 			t.Fatalf("snapshot in use expired after %d minutes", 20*(i+1))
 		}
 	}
 	second := store.nextToken(snap)
-	if _, ok := store.resume(first, "samplemember"); ok {
+	if _, ok := store.resume(first, "samplemember", letterboxd.ListWatchlist); ok {
 		t.Fatal("a replayed token was accepted")
 	}
 	now = now.Add(31 * time.Minute)
-	if _, ok := store.resume(second, "samplemember"); ok {
+	if _, ok := store.resume(second, "samplemember", letterboxd.ListWatchlist); ok {
 		t.Fatal("an unused snapshot outlived its lifetime")
 	}
 }

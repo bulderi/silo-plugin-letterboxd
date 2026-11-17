@@ -12,8 +12,8 @@ import (
 	"github.com/bulderi/silo-plugin-letterboxd/letterboxd"
 )
 
-// A watchlist traversal reads every Letterboxd page before it hands any film
-// to the host, and then serves the films from memory over further
+// A watchlist or ratings traversal reads every Letterboxd page before it hands
+// any film to the host, and then serves the films from memory over further
 // ListRemoteState pages. Reading the whole list first means a film removed on
 // Letterboxd while the host is paging cannot shift the list and make another
 // film look removed. Both the page reads and the film lookups may spread over
@@ -24,7 +24,8 @@ import (
 type snapshot struct {
 	id       string
 	username string
-	reader   *letterboxd.WatchlistReader
+	kind     letterboxd.ListKind
+	reader   *letterboxd.ListReader
 	// films is set once every watchlist page is read.
 	films []letterboxd.Poster
 	// offset is the next film to hand out.
@@ -54,7 +55,7 @@ func newSnapshotStore(ttl time.Duration, now func() time.Time) *snapshotStore {
 	return &snapshotStore{ttl: ttl, now: now, items: map[string]*snapshot{}}
 }
 
-func (s *snapshotStore) start(username string) (*snapshot, error) {
+func (s *snapshotStore) start(username string, kind letterboxd.ListKind) (*snapshot, error) {
 	var raw [12]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return nil, err
@@ -62,7 +63,8 @@ func (s *snapshotStore) start(username string) (*snapshot, error) {
 	snap := &snapshot{
 		id:       hex.EncodeToString(raw[:]),
 		username: username,
-		reader:   letterboxd.NewWatchlistReader(username),
+		kind:     kind,
+		reader:   letterboxd.NewListReader(kind, username),
 		touched:  s.now(),
 	}
 	s.mu.Lock()
@@ -73,8 +75,8 @@ func (s *snapshotStore) start(username string) (*snapshot, error) {
 }
 
 // resume returns the snapshot a page token names, only to the account that
-// started it and only for the token issued last.
-func (s *snapshotStore) resume(token, username string) (*snapshot, bool) {
+// started it, for the same list, and only for the token issued last.
+func (s *snapshotStore) resume(token, username string, kind letterboxd.ListKind) (*snapshot, bool) {
 	id, seq, err := parsePageToken(token)
 	if err != nil {
 		return nil, false
@@ -83,7 +85,7 @@ func (s *snapshotStore) resume(token, username string) (*snapshot, bool) {
 	defer s.mu.Unlock()
 	s.gcLocked()
 	snap, ok := s.items[id]
-	if !ok || !strings.EqualFold(snap.username, username) || snap.seq != seq {
+	if !ok || !strings.EqualFold(snap.username, username) || snap.kind != kind || snap.seq != seq {
 		return nil, false
 	}
 	snap.touched = s.now()

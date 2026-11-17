@@ -1,6 +1,6 @@
 // Package letterboxd talks to the Letterboxd website the way a signed-in
-// browser does: HTML pages for reading, the site's own JSON endpoint for
-// watchlist writes. Requests use a Chrome TLS and HTTP/2 fingerprint because
+// browser does: HTML pages for reading, the site's own JSON endpoints for
+// watchlist and rating writes. Requests use a Chrome TLS and HTTP/2 fingerprint because
 // the sign-in flow is behind Cloudflare.
 package letterboxd
 
@@ -412,9 +412,51 @@ func (c *Client) FilmByExternalID(ctx context.Context, namespace, id string) (Fi
 	return film, nil
 }
 
+// RatingsPath is the first page of the films a member has rated.
+func RatingsPath(username string) string {
+	return "/" + url.PathEscape(strings.ToLower(username)) + "/films/rated/.5-5/"
+}
+
+// RatingsPage loads one page of a member's rated films: a path from
+// RatingsPath or a previous page's NextPath.
+func (c *Client) RatingsPage(ctx context.Context, path string) (ListPage, error) {
+	if !strings.HasPrefix(path, "/") || strings.Contains(path, "//") {
+		return ListPage{}, fmt.Errorf("ratings path %q: %w", path, ErrUnexpectedPage)
+	}
+	resp, err := c.get(ctx, path, false)
+	if err != nil {
+		return ListPage{}, err
+	}
+	page, err := ParseRatingsPage(resp.body)
+	if err != nil {
+		return ListPage{}, fmt.Errorf("ratings %s: %w", path, err)
+	}
+	return page, nil
+}
+
 // SetInWatchlist adds (in=true) or removes a film by LID. It sets the desired
 // state, so repeating it is harmless.
 func (c *Client) SetInWatchlist(ctx context.Context, lid, filmSlug string, in bool) error {
+	return c.patchMe(ctx, "/api/v0/me/watchlist/", lid, filmSlug, fmt.Sprintf(`{"inWatchlist":%t}`, in))
+}
+
+// SetRating sets the member's rating of a film by LID, from 1 to 10 in half
+// stars, or clears it when rating is 0. It sets the desired state, so
+// repeating it is harmless. Rating a film also marks it watched on Letterboxd.
+func (c *Client) SetRating(ctx context.Context, lid, filmSlug string, rating int) error {
+	if rating < 0 || rating > 10 {
+		return fmt.Errorf("rating %d is outside 0 to 10", rating)
+	}
+	value := "null"
+	if rating > 0 {
+		value = strconv.FormatFloat(float64(rating)/2, 'f', -1, 64)
+	}
+	return c.patchMe(ctx, "/api/v0/me/rate/", lid, filmSlug, `{"rating":`+value+`}`)
+}
+
+// patchMe sends one of the site's own desired-state writes for a film, as the
+// film page's buttons do.
+func (c *Client) patchMe(ctx context.Context, prefix, lid, filmSlug, body string) error {
 	if !ValidLID(lid) {
 		return fmt.Errorf("invalid LID %q", lid)
 	}
@@ -431,11 +473,11 @@ func (c *Client) SetInWatchlist(ctx context.Context, lid, filmSlug string, in bo
 	if filmSlug != "" {
 		referer = c.abs("/film/" + url.PathEscape(filmSlug) + "/")
 	}
-	path := "/api/v0/me/watchlist/" + lid
+	path := prefix + lid
 	resp, err := c.send(ctx, request{
 		method:  http.MethodPatch,
 		path:    path,
-		body:    fmt.Sprintf(`{"inWatchlist":%t}`, in),
+		body:    body,
 		referer: referer,
 		headers: map[string]string{
 			"content-type": "application/json; charset=UTF-8",

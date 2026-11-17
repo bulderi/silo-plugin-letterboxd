@@ -69,7 +69,7 @@ func (r *manifestRuntime) GetManifest(context.Context, *pluginv1.GetManifestRequ
 	return &pluginv1.GetManifestResponse{Manifest: r.manifest}, nil
 }
 
-// TestWatchSyncOverGRPC connects, reads the watchlist, and writes to it
+// TestWatchSyncOverGRPC connects, reads and writes the watchlist and ratings
 // through the gRPC services the host calls.
 func TestWatchSyncOverGRPC(t *testing.T) {
 	site := fakesite.New(t)
@@ -129,6 +129,37 @@ func TestWatchSyncOverGRPC(t *testing.T) {
 	}
 	if got := strings.Join(site.Watchlist(), ","); got != "bB2,eE5,aA1" {
 		t.Fatalf("watchlist = %s", got)
+	}
+
+	// Ratings: Letterboxd's 3.5 stars reads as 7, and Silo's 9 is written as
+	// 4.5 stars.
+	site.SetRatings(fakesite.Rating{LID: "aA1", Rating: 7})
+	rated, err := client.ListRemoteState(ctx, &pluginv1.WatchSyncListRemoteStateRequest{
+		Context:    auth,
+		StateKinds: []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_RATING},
+	})
+	if err != nil || rated.GetFault() != nil || !rated.GetCompleteSnapshot() || len(rated.GetItems()) != 1 ||
+		rated.GetItems()[0].GetRating().GetRating() != 7 || rated.GetItems()[0].GetProviderItemKey() != "letterboxd:aA1" {
+		t.Fatalf("ratings read: %v %v", err, rated)
+	}
+	applied, err = client.ApplyEvents(ctx, &pluginv1.WatchSyncApplyEventsRequest{
+		Context: auth,
+		Events: []*pluginv1.WatchSyncEvent{{
+			EventId:   "rate-northern-lights",
+			Operation: pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_SET_RATING,
+			Rating:    9,
+			Media: &pluginv1.WatchSyncMedia{
+				MediaType:   pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE,
+				ExternalIds: map[string]string{"tmdb": "5550002"},
+			},
+		}},
+	})
+	if err != nil || applied.GetFault() != nil ||
+		applied.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
+		t.Fatalf("rating write: %v %v", err, applied)
+	}
+	if got := site.Ratings()["bB2"]; got != 9 {
+		t.Fatalf("Letterboxd rating = %d, want 9", got)
 	}
 
 	account, err := client.GetAccount(ctx, &pluginv1.WatchSyncGetAccountRequest{Context: auth})

@@ -26,9 +26,18 @@ func TestManifest(t *testing.T) {
 	if !ws.GetImportWatchlist() || !ws.GetExportWatchlist() || !ws.GetRemoveWatchlist() || !ws.GetProvidesWatchlistOrder() {
 		t.Error("watchlist import, export, removal and order must all be advertised")
 	}
-	if ws.GetImportWatched() || ws.GetExportWatched() || ws.GetImportFavorites() || ws.GetImportRatings() ||
-		ws.GetExportRatings() || ws.GetScrobblePlayback() || ws.GetImportProgress() {
-		t.Error("only the watchlist is synced")
+	if !ws.GetImportRatings() || !ws.GetExportRatings() {
+		t.Error("rating import and export must both be advertised")
+	}
+	// Rating a film on Letterboxd marks it watched, so Silo must hold back a
+	// new rating until the profile has finished the film.
+	gate := ws.GetRatingExportRequiresWatched()
+	if len(gate) != 1 || gate[0] != pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE {
+		t.Errorf("rating_export_requires_watched = %v, want movies", gate)
+	}
+	if ws.GetImportWatched() || ws.GetExportWatched() || ws.GetImportFavorites() ||
+		ws.GetScrobblePlayback() || ws.GetImportProgress() {
+		t.Error("only the watchlist and ratings are synced")
 	}
 	media := ws.GetSupportedMediaTypes()
 	if len(media) != 1 || media[0] != pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE {

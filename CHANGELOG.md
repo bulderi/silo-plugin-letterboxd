@@ -3,6 +3,16 @@
 Notable changes to the Letterboxd watch-provider plugin. Versions follow
 `version` in `manifest.json`; each release is tagged `v<version>`.
 
+## Unreleased
+
+- Ratings sync both ways for movies. Letterboxd's half stars map exactly to
+  Silo's 1-to-10 scale. A rating made in Silo is sent once the profile has
+  finished the film, because rating a film on Letterboxd marks it watched.
+- Rating reads are complete snapshots checked against the count Letterboxd
+  reports, like watchlist reads, and fail rather than return a partial list.
+- `cmd/lbcheck` reads the ratings, and `-rate` rates one film, reads it back,
+  and removes the rating.
+
 ## 0.4.0 — 2026-11-09
 
 - New connections use the browser's `letterboxd.user` cookie instead of a

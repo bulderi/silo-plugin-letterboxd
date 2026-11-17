@@ -13,6 +13,7 @@ import (
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/bulderi/silo-plugin-letterboxd/letterboxd"
 )
@@ -44,6 +45,8 @@ type Options struct {
 	PageBudget time.Duration
 	Logger     hclog.Logger
 	Now        func() time.Time
+	// Location dates diary entries; nil uses the process's time zone (TZ).
+	Location *time.Location
 }
 
 // Provider is the WatchSyncProvider server.
@@ -57,6 +60,10 @@ type Provider struct {
 	now        func() time.Time
 	cache      *filmCache
 	snapshots  *snapshotStore
+	diaryStart *diaryStart
+	// diaryEntries are the diary entries the plugin logged recently.
+	diaryEntries *diaryEntries
+	location     *time.Location
 }
 
 // New creates a Provider.
@@ -73,14 +80,21 @@ func New(opts Options) *Provider {
 	if budget <= 0 {
 		budget = 60 * time.Second
 	}
+	location := opts.Location
+	if location == nil {
+		location = time.Local
+	}
 	return &Provider{
-		baseURL:    opts.BaseURL,
-		throttle:   opts.Throttle,
-		pageBudget: budget,
-		logger:     logger,
-		now:        now,
-		cache:      newFilmCache(opts.Store, now),
-		snapshots:  newSnapshotStore(30*time.Minute, now),
+		location:     location,
+		diaryStart:   newDiaryStart(opts.Store, now),
+		diaryEntries: newDiaryEntries(opts.Store, now),
+		baseURL:      opts.BaseURL,
+		throttle:     opts.Throttle,
+		pageBudget:   budget,
+		logger:       logger,
+		now:          now,
+		cache:        newFilmCache(opts.Store, now),
+		snapshots:    newSnapshotStore(30*time.Minute, now),
 	}
 }
 
@@ -200,6 +214,8 @@ type session struct {
 	relogged bool
 	// refused records that the site refused a write on a cookie connection.
 	refused bool
+	// logPlays is the connection's SettingLogPlays.
+	logPlays bool
 }
 
 func (p *Provider) openSession(authCtx *pluginv1.WatchSyncAuthenticatedContext) (*session, *pluginv1.WatchSyncFault) {
@@ -212,7 +228,12 @@ func (p *Provider) openSession(authCtx *pluginv1.WatchSyncAuthenticatedContext) 
 		return nil, faultFor(err)
 	}
 	client.SetSession(creds.session)
-	return &session{client: client, creds: creds, original: creds.session}, nil
+	return &session{
+		client: client, creds: creds, original: creds.session,
+		// A host without connection settings sends none, which is the
+		// default: off.
+		logPlays: authCtx.GetConnectionSettings()[SettingLogPlays] == "true",
+	}, nil
 }
 
 // relogin signs in again once per RPC, for an expired session. A cookie
@@ -263,7 +284,7 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 	kind, ok := listKind(req.GetStateKinds())
 	if !ok {
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST,
-			"Letterboxd sync provides the watchlist and ratings, one at a time.")}, nil
+			"Letterboxd sync provides the watchlist, ratings, and diary, one at a time.")}, nil
 	}
 	noun := listNoun(kind)
 	sess, fault := p.openSession(req.GetContext())
@@ -311,12 +332,15 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 			return fail(err, noun+" read")
 		}
 		snap.films = append(make([]letterboxd.Poster, 0, len(films)), films...)
+		if kind == letterboxd.ListDiary {
+			snap.films, snap.plays = aggregateDiary(films)
+		}
 		p.logger.Info("letterboxd "+noun+" read", "username", username,
 			"films", len(films), "pages", snap.reader.PagesRead())
 	}
 
 	var items []*pluginv1.WatchSyncRemoteState
-	warnings := pageWarnings{ratings: kind == letterboxd.ListRatings}
+	warnings := pageWarnings{kind: kind}
 	for snap.films != nil && snap.offset < len(snap.films) {
 		poster := snap.films[snap.offset]
 		film, cached := p.cache.byLIDFresh(poster.LID)
@@ -327,7 +351,16 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 			}
 			var stale bool
 			var err error
-			if film, stale, err = p.fetchPoster(ctx, sess, poster); err != nil {
+			film, stale, err = p.fetchPoster(ctx, sess, poster)
+			if errors.Is(err, errFilmPageMissing) && kind == letterboxd.ListDiary {
+				// A diary read is not a snapshot, so a film left out is only
+				// not imported this time.
+				warnings.missing = append(warnings.missing, poster.Name)
+				snap.offset++
+				worked = true
+				continue
+			}
+			if err != nil {
 				return fail(err, "film lookup "+poster.Slug)
 			}
 			if stale {
@@ -336,6 +369,10 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 			worked = true
 		}
 		switch {
+		case film.isMovie() && kind == letterboxd.ListDiary:
+			if day, ok := p.diaryDay(poster.WatchedOn); ok {
+				items = append(items, watchedState(film, day, snap.plays[poster.LID]))
+			}
 		case film.isMovie():
 			items = append(items, remoteState(film, kind, poster.Rating))
 		case film.TMDBType == "tv":
@@ -348,8 +385,10 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 	p.flushCache(ctx)
 
 	resp := &pluginv1.WatchSyncListRemoteStateResponse{
-		Items:              items,
-		CompleteSnapshot:   true,
+		Items: items,
+		// The diary is history: a play missing from a read is not a removal,
+		// and Silo never removes plays on import.
+		CompleteSnapshot:   kind != letterboxd.ListDiary,
 		UpdatedCredentials: sess.updated(),
 		Warnings:           warnings.list(),
 	}
@@ -398,6 +437,9 @@ func (p *Provider) fetchPoster(ctx context.Context, sess *session, poster letter
 	}
 	film = cachedFromPage(page, p.now())
 	film.LID = poster.LID
+	if film.UID == "" {
+		film.UID = poster.UID
+	}
 	if film.Title == "" {
 		film.Title, film.Year = letterboxd.TitleYear(poster.Name)
 	}
@@ -408,22 +450,7 @@ func (p *Provider) fetchPoster(ctx context.Context, sess *session, poster letter
 // remoteState is a film of a watchlist or ratings traversal. A rating comes
 // from the ratings page, which only lists films with one.
 func remoteState(film cachedFilm, kind letterboxd.ListKind, rating int) *pluginv1.WatchSyncRemoteState {
-	ids := map[string]string{}
-	if film.TMDBID != "" {
-		ids["tmdb"] = film.TMDBID
-	}
-	if film.IMDbID != "" {
-		ids["imdb"] = film.IMDbID
-	}
-	state := &pluginv1.WatchSyncRemoteState{
-		ProviderItemKey: itemKeyPrefix + film.LID,
-		Media: &pluginv1.WatchSyncMedia{
-			MediaType:   pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE,
-			Title:       film.Title,
-			Year:        int32(film.Year),
-			ExternalIds: ids,
-		},
-	}
+	state := filmState(film)
 	if kind == letterboxd.ListRatings {
 		state.Rating = &pluginv1.WatchSyncRemoteRatingState{Rating: int32(rating)}
 	} else {
@@ -432,7 +459,33 @@ func remoteState(film cachedFilm, kind letterboxd.ListKind, rating int) *pluginv
 	return state
 }
 
-// ApplyEvents changes the Letterboxd watchlist and ratings.
+// watchedState is a film of a diary read: its entry count and newest date.
+func watchedState(film cachedFilm, day time.Time, plays int) *pluginv1.WatchSyncRemoteState {
+	state := filmState(film)
+	state.Watched = &pluginv1.WatchSyncRemoteWatchedState{PlayCount: int32(max(plays, 1)), LastWatchedAt: timestamppb.New(day)}
+	return state
+}
+
+func filmState(film cachedFilm) *pluginv1.WatchSyncRemoteState {
+	ids := map[string]string{}
+	if film.TMDBID != "" {
+		ids["tmdb"] = film.TMDBID
+	}
+	if film.IMDbID != "" {
+		ids["imdb"] = film.IMDbID
+	}
+	return &pluginv1.WatchSyncRemoteState{
+		ProviderItemKey: itemKeyPrefix + film.LID,
+		Media: &pluginv1.WatchSyncMedia{
+			MediaType:   pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE,
+			Title:       film.Title,
+			Year:        int32(film.Year),
+			ExternalIds: ids,
+		},
+	}
+}
+
+// ApplyEvents changes the Letterboxd watchlist, ratings, and diary.
 func (p *Provider) ApplyEvents(ctx context.Context, req *pluginv1.WatchSyncApplyEventsRequest) (*pluginv1.WatchSyncApplyEventsResponse, error) {
 	sess, fault := p.openSession(req.GetContext())
 	if fault != nil {
@@ -442,6 +495,12 @@ func (p *Provider) ApplyEvents(ctx context.Context, req *pluginv1.WatchSyncApply
 	results := make([]*pluginv1.WatchSyncApplyResult, 0, len(req.GetEvents()))
 	var paused *pluginv1.WatchSyncFault
 	for _, event := range req.GetEvents() {
+		if paused == nil && p.callNearlySpent(ctx) {
+			// A diary play can take several throttled requests; the rest
+			// waits for the next call rather than failing the whole one.
+			paused = newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
+				"Silo's time for this call ran out before this change; it will be retried.")
+		}
 		if paused != nil {
 			results = append(results, applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_RETRY, paused))
 			continue
@@ -495,12 +554,27 @@ func (p *Provider) applyOne(ctx context.Context, sess *session, event *pluginv1.
 		if rating < 1 || rating > 10 {
 			return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST, "A rating must be from 1 to 10."), nil
 		}
-		write = func(target writeTarget) error { return sess.client.SetRating(ctx, target.lid, target.slug, rating) }
+		write = func(target writeTarget) error {
+			// The entry first: an entry's rating also becomes the film's.
+			if err := p.rateLoggedEntries(ctx, sess, target.lid, rating); err != nil {
+				return err
+			}
+			return sess.client.SetRating(ctx, target.lid, target.slug, rating)
+		}
 	case pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_REMOVE_RATING:
 		ratingRemoval = true
-		write = func(target writeTarget) error { return sess.client.SetRating(ctx, target.lid, target.slug, 0) }
+		write = func(target writeTarget) error {
+			// The entry first, so no rated entry the plugin logged is left
+			// to hold the film's rating up.
+			if err := p.rateLoggedEntries(ctx, sess, target.lid, 0); err != nil {
+				return err
+			}
+			return sess.client.SetRating(ctx, target.lid, target.slug, 0)
+		}
+	case pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_MARK_WATCHED:
+		return p.applyWatched(ctx, sess, event)
 	default:
-		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST, "Letterboxd sync handles the watchlist and ratings."), nil
+		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST, "Letterboxd sync handles the watchlist, ratings, and diary."), nil
 	}
 	if event.GetMedia().GetMediaType() != pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE {
 		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST, "Letterboxd sync handles movies only."), nil
@@ -516,6 +590,12 @@ func (p *Provider) applyOne(ctx context.Context, sess *session, event *pluginv1.
 	if err == nil {
 		err = p.writeFilm(ctx, sess, func() error { return write(target) })
 	}
+	return p.writeResult(event, target, err, ratingRemoval)
+}
+
+// writeResult maps the outcome of a write to the event's result. A non-nil
+// second value fails the whole request.
+func (p *Provider) writeResult(event *pluginv1.WatchSyncEvent, target writeTarget, err error, ratingRemoval bool) (*pluginv1.WatchSyncApplyResult, *pluginv1.WatchSyncFault) {
 	switch {
 	case err == nil:
 		return applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED, nil), nil
@@ -575,7 +655,8 @@ func (p *Provider) writeFilm(ctx context.Context, sess *session, write func() er
 // writeTarget is the Letterboxd film an event changes.
 type writeTarget struct {
 	lid  string
-	slug string // optional; only used as the Referer
+	uid  string // optional; the diary's rewatch check needs it
+	slug string // optional; used as the Referer
 	tv   bool   // Letterboxd maps the title to a TMDB TV entry
 }
 
@@ -587,7 +668,7 @@ func (p *Provider) targetForEvent(ctx context.Context, sess *session, event *plu
 		// alone is enough to write.
 		target := writeTarget{lid: lid}
 		if film, ok := p.cache.byLIDFresh(lid); ok {
-			target.slug = film.Slug
+			target.slug, target.uid = film.Slug, film.UID
 		}
 		return target, nil
 	}
@@ -615,9 +696,16 @@ func (p *Provider) targetForEvent(ctx context.Context, sess *session, event *plu
 		if lookup.namespace == "tmdb" && film.TMDBID != "" && film.TMDBID != id {
 			continue
 		}
-		return writeTarget{lid: film.LID, slug: film.Slug, tv: film.TMDBType == "tv"}, nil
+		return writeTarget{lid: film.LID, uid: film.UID, slug: film.Slug, tv: film.TMDBType == "tv"}, nil
 	}
 	return writeTarget{}, letterboxd.ErrNotFound
+}
+
+// callNearlySpent reports whether less than deadlineHeadroom is left before
+// the host's deadline for this call, too little to start another change.
+func (p *Provider) callNearlySpent(ctx context.Context) bool {
+	deadline, ok := ctx.Deadline()
+	return ok && time.Until(deadline) < deadlineHeadroom
 }
 
 func (p *Provider) pageDeadline(ctx context.Context, started time.Time) time.Time {
@@ -655,16 +743,22 @@ func listKind(kinds []pluginv1.WatchSyncRemoteStateKind) (letterboxd.ListKind, b
 		return letterboxd.ListWatchlist, true
 	case pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_RATING:
 		return letterboxd.ListRatings, true
+	case pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHED:
+		return letterboxd.ListDiary, true
 	default:
 		return 0, false
 	}
 }
 
 func listNoun(kind letterboxd.ListKind) string {
-	if kind == letterboxd.ListRatings {
+	switch kind {
+	case letterboxd.ListRatings:
 		return "ratings"
+	case letterboxd.ListDiary:
+		return "diary"
+	default:
+		return "watchlist"
 	}
-	return "watchlist"
 }
 
 func applyResult(event *pluginv1.WatchSyncEvent, status pluginv1.WatchSyncApplyStatus, fault *pluginv1.WatchSyncFault) *pluginv1.WatchSyncApplyResult {
@@ -722,6 +816,9 @@ func faultFor(err error) *pluginv1.WatchSyncFault {
 	case errors.Is(err, errFilmPageMissing):
 		return newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
 			"A film on a Letterboxd list could not be read; the sync will be retried.")
+	case errors.Is(err, errDiaryRead):
+		return newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
+			"The Letterboxd diary page for the play's date was not found; the play will be retried.")
 	case errors.Is(err, letterboxd.ErrIncompleteList):
 		return newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
 			"The Letterboxd list changed while it was read; the sync will be retried.")

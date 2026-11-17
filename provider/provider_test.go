@@ -26,17 +26,21 @@ var testFilms = []fakesite.Film{
 
 // memStore enforces the host's instance-state limits.
 type memStore struct {
-	mu     sync.Mutex
-	values map[string][]byte
-	reads  int
+	mu       sync.Mutex
+	values   map[string][]byte
+	reads    int
+	keyReads map[string]int
 }
 
-func newMemStore() *memStore { return &memStore{values: map[string][]byte{}} }
+func newMemStore() *memStore {
+	return &memStore{values: map[string][]byte{}, keyReads: map[string]int{}}
+}
 
 func (m *memStore) Read(_ context.Context, key string) ([]byte, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reads++
+	m.keyReads[key]++
 	v, ok := m.values[key]
 	return v, ok, nil
 }
@@ -76,6 +80,8 @@ type harness struct {
 	store *memStore
 	p     *Provider
 	creds *pluginv1.WatchSyncCredentials
+	// settings are the connection settings the host sends.
+	settings map[string]string
 }
 
 func newHarness(t *testing.T, opts ...func(*Options)) *harness {
@@ -135,7 +141,7 @@ func (h *harness) assertNoSignIn() {
 }
 
 func (h *harness) authContext() *pluginv1.WatchSyncAuthenticatedContext {
-	return &pluginv1.WatchSyncAuthenticatedContext{CapabilityId: "letterboxd", Credentials: h.creds}
+	return &pluginv1.WatchSyncAuthenticatedContext{CapabilityId: "letterboxd", Credentials: h.creds, ConnectionSettings: h.settings}
 }
 
 // persist applies updated credentials the way the host does.
@@ -175,8 +181,9 @@ func (h *harness) listKind(kind pluginv1.WatchSyncRemoteStateKind) ([]*pluginv1.
 		if resp.GetFault() != nil {
 			return nil, pages, warnings, resp.GetFault()
 		}
-		if !resp.GetCompleteSnapshot() {
-			h.t.Fatal("traversal must be a complete snapshot on every page")
+		// The diary is history and never a snapshot; every list is one.
+		if want := kind != pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHED; resp.GetCompleteSnapshot() != want {
+			h.t.Fatalf("complete_snapshot = %v on a %v page, want %v", resp.GetCompleteSnapshot(), kind, want)
 		}
 		items = append(items, resp.GetItems()...)
 		warnings = append(warnings, resp.GetWarnings()...)
@@ -868,7 +875,7 @@ func TestListRemoteStateRejectsBadRequests(t *testing.T) {
 	h.connect()
 	watchlist := []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST}
 	cases := map[string]*pluginv1.WatchSyncListRemoteStateRequest{
-		"other kind": {Context: h.authContext(), StateKinds: []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHED}},
+		"other kind": {Context: h.authContext(), StateKinds: []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_PROGRESS}},
 		"two kinds": {Context: h.authContext(), StateKinds: []pluginv1.WatchSyncRemoteStateKind{
 			pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST,
 			pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_RATING,

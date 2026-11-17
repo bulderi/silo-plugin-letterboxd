@@ -21,6 +21,10 @@ type Poster struct {
 	// Rating is the list owner's rating from 1 to 10 (half stars), shown on a
 	// ratings page, or 0 when the tile shows none.
 	Rating int
+	// ViewingID and WatchedOn describe a diary entry: the entry's own id and
+	// its date as YYYY-MM-DD. Both are empty for other lists.
+	ViewingID string
+	WatchedOn string
 }
 
 // ListPage is one page of a member's film list: the watchlist or the rated
@@ -39,7 +43,10 @@ type WatchlistPage = ListPage
 
 // FilmPage holds the identifiers of a film's own page.
 type FilmPage struct {
-	LID      string
+	LID string
+	// UID is the film's site-wide id, e.g. "film:426406", which the diary's
+	// rewatch check takes; empty when the page does not show it.
+	UID      string
 	Slug     string
 	Title    string
 	Year     int
@@ -59,6 +66,8 @@ var (
 	nameYearPattern  = regexp.MustCompile(`^(.*\S)\s+\((\d{4})\)$`)
 	lidPattern       = regexp.MustCompile(`^[A-Za-z0-9]+$`)
 	ratedPattern     = regexp.MustCompile(`^rated-(\d+)$`)
+	diaryDatePattern = regexp.MustCompile(`/diary/films/for/(\d{4})/(\d{2})/(\d{2})/$`)
+	viewingIDPattern = regexp.MustCompile(`^\d{1,20}$`)
 	// ratedCountPattern reads "... watched 1,685 films rated between ..." from
 	// a ratings page's heading. The heading names a guest's view of the
 	// member, so it reads the same for the member signed in.
@@ -197,6 +206,79 @@ func parseListPage(body []byte, ratings bool) (ListPage, error) {
 	}
 }
 
+// ParseDiaryPage reads one page of a member's film diary
+// (/<member>/diary/films/, or one day's /<member>/diary/films/for/Y/M/D/):
+// one Poster per entry, with the entry's id and date, and the next page of
+// the diary. Every entry row must carry its film, id, and date. A page
+// without entries is an empty diary only when the page says so.
+func ParseDiaryPage(body []byte) (ListPage, error) {
+	if !IsSitePage(body) {
+		return ListPage{}, ErrUnexpectedPage
+	}
+	page := ListPage{Total: -1}
+	z := html.NewTokenizer(bytes.NewReader(body))
+	rowDepth := 0
+	var entry Poster
+	sawPoster := false
+	finish := func() bool {
+		if !sawPoster || !viewingIDPattern.MatchString(entry.ViewingID) || entry.WatchedOn == "" {
+			return false
+		}
+		page.Films = append(page.Films, entry)
+		return true
+	}
+	for {
+		tt := z.Next()
+		switch tt {
+		case html.ErrorToken:
+			if rowDepth > 0 {
+				return ListPage{}, ErrUnexpectedPage
+			}
+			if len(page.Films) == 0 && page.Total != 0 {
+				return ListPage{}, ErrUnexpectedPage
+			}
+			return page, nil
+		case html.StartTagToken, html.SelfClosingTagToken:
+			tok := z.Token()
+			attrs := attrMap(tok)
+			if rowDepth > 0 && tok.Data == "tr" && tt == html.StartTagToken {
+				rowDepth++
+			}
+			switch {
+			case tok.Data == "tr" && hasClass(attrs["class"], "diary-entry-row") && rowDepth == 0:
+				rowDepth = 1
+				entry = Poster{ViewingID: strings.TrimSpace(attrs["data-viewing-id"])}
+				sawPoster = false
+			case rowDepth > 0 && attrs["data-component-class"] == "LazyPoster" && !sawPoster:
+				poster, ok := posterFromAttrs(attrs)
+				if !ok {
+					return ListPage{}, ErrUnexpectedPage
+				}
+				entry.LID, entry.UID, entry.Slug, entry.Name = poster.LID, poster.UID, poster.Slug, poster.Name
+				sawPoster = true
+			case rowDepth > 0 && tok.Data == "a" && hasClass(attrs["class"], "daydate"):
+				if m := diaryDatePattern.FindStringSubmatch(attrs["href"]); m != nil {
+					entry.WatchedOn = m[1] + "-" + m[2] + "-" + m[3]
+				}
+			case rowDepth == 0 && tok.Data == "a" && hasClass(attrs["class"], "next") && page.NextPath == "" &&
+				strings.Contains(attrs["href"], "/diary/films/page/"):
+				// A day's page links its next day as "next"; only the diary's own
+				// pages continue a read.
+				page.NextPath = attrs["href"]
+			case hasClass(attrs["class"], "filtered-message") && hasClass(attrs["class"], "empty-text"):
+				page.Total = 0
+			}
+		case html.EndTagToken:
+			if tok := z.Token(); tok.Data == "tr" && rowDepth > 0 {
+				rowDepth--
+				if rowDepth == 0 && !finish() {
+					return ListPage{}, ErrUnexpectedPage
+				}
+			}
+		}
+	}
+}
+
 // ratedClass reads the rating from a class list such as
 // "rating -micro -darker rated-7".
 func ratedClass(classAttr string) (int, bool) {
@@ -245,6 +327,7 @@ loop:
 	for _, poster := range posters {
 		if poster.Slug == film.Slug {
 			film.LID = poster.LID
+			film.UID = poster.UID
 			if title, year := TitleYear(poster.Name); year > 0 {
 				film.Title, film.Year = title, year
 			}

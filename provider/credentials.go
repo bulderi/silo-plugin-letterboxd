@@ -13,6 +13,12 @@ const (
 	// passes to ExchangeAPIKey: config key "account", field "username".
 	ConnectionUsernameKey = "account.username"
 
+	// SettingLogPlays is the connection setting that turns diary logging on.
+	// Silo turns watched export on for every connection by default, and a
+	// diary entry is public and cannot be removed by the plugin, so the
+	// plugin logs plays only when the profile switches this on.
+	SettingLogPlays = "log_plays_in_diary"
+
 	attrUsername = "username"
 	attrLogin    = "login"
 	attrPassword = "password"

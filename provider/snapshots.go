@@ -30,6 +30,8 @@ type snapshot struct {
 	films []letterboxd.Poster
 	// offset is the next film to hand out.
 	offset int
+	// plays counts each film's entries in a diary read.
+	plays map[string]int
 	// seq is the page number the next token must carry, so a replayed or
 	// stale token is refused.
 	seq     int

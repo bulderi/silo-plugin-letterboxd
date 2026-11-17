@@ -1,6 +1,6 @@
 # Letterboxd watch-provider plugin for Silo
 
-Syncs a Silo profile's watchlist and movie ratings with a
+Syncs a Silo profile's watchlist, movie ratings, and diary with a
 [Letterboxd](https://letterboxd.com) account through Silo's
 `watch_sync_provider.v1` plugin contract. Movies only; series in Silo are left
 alone.
@@ -29,11 +29,14 @@ ignore the warnings.
 - Removes films on the other side when watchlist removal sync is on.
 - Imports Letterboxd ratings into Silo and sends ratings set, changed, or
   removed in Silo to Letterboxd, in half stars (see [Ratings](#ratings)).
+- Imports diary entries into Silo as plays and logs movies finished in Silo in
+  the diary (see [Diary](#diary)).
 - Reports skipped entries (TV titles, films without a TMDB or IMDb link) as sync
   warnings that Silo shows with the sync run.
 
-Letterboxd watched history, likes, and lists are not synced, and the other
-options Silo shows on the connection have no effect for Letterboxd.
+Films marked watched on Letterboxd without a diary entry, likes, and lists are
+not synced, and the other options Silo shows on the connection have no effect
+for Letterboxd.
 
 ## Install
 
@@ -86,7 +89,12 @@ Letterboxd again.
    not on Letterboxd, such as series, sort after the films.
 5. **Import ratings** and **Send ratings** turn each direction of rating sync
    on or off. Check them on a connection made before the plugin synced
-   ratings, which may have them off.
+   ratings, which may have them off. The watched import option does the same
+   for reading the diary.
+6. **Log plays in the Letterboxd diary** is off by default. Turn it on to have
+   movies you finish in Silo logged in the diary. Silo's watched export option
+   must be on too; Silo turns that on for every connection, so this switch is
+   what decides.
 
 Silo stores the username and cookie encrypted with the profile's connection.
 The cookie gives full access to the Letterboxd account, so treat it like a
@@ -94,8 +102,8 @@ password. The plugin keeps it and page contents out of every log line and error
 message it returns. Signing out of Letterboxd in that browser can end the
 cookie. When Letterboxd stops accepting it, connect again with a new one.
 
-The first sync looks up every watchlisted and rated film once, at about 1.5
-seconds per film. A manual sync stops after Silo's 10-minute limit; the next sync continues
+The first sync looks up every watchlisted, rated, and logged film once, at
+about 1.5 seconds per film. A manual sync stops after Silo's 10-minute limit; the next sync continues
 from the cache, and later syncs take seconds.
 
 ## How sync works
@@ -106,6 +114,8 @@ from the cache, and later syncs take seconds.
 | Silo → Letterboxd | The Silo item's TMDB ID (or IMDb ID) is resolved through `letterboxd.com/tmdb/<id>/`, then the site's own `PATCH /api/v0/me/watchlist/<film>` sets `inWatchlist`. |
 | Letterboxd ratings → Silo | Every page of `/<member>/films/rated/.5-5/` is read; each film tile carries the member's rating. |
 | Silo ratings → Letterboxd | The film is resolved the same way, then the site's own `PATCH /api/v0/me/rate/<film>` sets `rating` in half stars, or `null` to remove it. |
+| Letterboxd diary → Silo | Every page of `/<member>/diary/films/` is read; each row is one entry with its date. |
+| Silo plays → Letterboxd diary | The film is resolved the same way, the day's diary page is checked, then the site's own `POST /api/v0/production-log-entries` logs the film for that date. |
 
 - **Complete snapshots only.** A read that fails anywhere (network, rate limit,
   Cloudflare challenge, a page the parser does not understand) returns a fault
@@ -166,13 +176,70 @@ servers that store whole stars round on their side (see
   profile has a completed play of the film. Removing the rating leaves the film
   marked watched on Letterboxd.
 
+### Diary
+
+- **Reads** return one row per film: how many diary entries it has, and the
+  newest entry's date. Silo imports the newest play of a title. A diary entry
+  has a date but no time, so the plugin reads it as the start of that day in
+  the Silo server's time zone. The diary is history, not a snapshot: an entry
+  missing from a read is not a removal, and Silo never removes plays on
+  import. A film whose page is gone is skipped with a warning.
+- **Writes** happen only when the connection has **Log plays in the
+  Letterboxd diary** on (`log_plays_in_diary`), which is off by default: Silo
+  turns watched export on for every connection, and an entry is public and
+  cannot be removed by the plugin. With the switch off, a play is answered "no
+  change" and never logged later. With it on, the plugin logs a completed Silo
+  play as a diary entry for the play's date in the server's time zone (`TZ`),
+  with the film's rating on Letterboxd if the member set one (a rating the
+  site derived is left out), as the site's Log form fills it in, and no review, tags, or like. A diary entry is not desired state,
+  since each call adds one, so the plugin first reads that day's diary page
+  and answers "no change" when the film is already there. A retried play
+  therefore never adds a second entry, and neither does a second play of the
+  same film that day.
+- **Rewatches.** The plugin asks the site's own
+  `/s/check-viewingable-relation` for the member's earliest diary entry of the
+  film, as the Log form does, and marks the entry as a rewatch when that entry
+  is on or before the play's date. A film only marked watched, with no diary
+  entry, counts as a first watch, as it does on the site. If the answer cannot
+  be read or is refused, the play is logged without the flag rather than held
+  back, and the write itself shows whether the cookie still works; a rate
+  limit or Cloudflare check retries the play.
+- **Ratings on entries.** A rating usually comes after the play, so the
+  entry is logged before it exists. The plugin records the entries it logs,
+  per account in its instance state, and when Silo sends a rating, or removes
+  one, within a week of logging, it puts that rating on the film's newest
+  entry it logged; an earlier viewing's entry keeps the rating it had then.
+  The diary then reads "watched on this date, rated this". It reads the entry
+  first and changes only the rating, keeping the date and rewatch flag. It
+  leaves an entry alone when someone changed it after the plugin's last write
+  (its `whenUpdated` differs), when it has a review, tags, or a like, and when
+  diary logging is off. Ratings after a week change the film's rating only, as
+  rating a film on the site does. The entry is updated before the film, so a
+  failed entry update retries the whole rating.
+- **Only new plays.** Silo queues every completed play in the profile's history
+  when watched export is turned on. The plugin records, per Letterboxd account
+  in its instance state, when it first saw a play to log, and answers "no
+  change" for plays from more than a day before then, so the export does not
+  add your whole history to the diary and your followers' activity. The day of
+  grace lets the play that started the export, and a film finished just before
+  it was turned on, still reach the diary. Connecting again with a new cookie
+  keeps that moment.
+- **No echo.** Silo does not send a play back to the connection it was imported
+  from. An entry the plugin logged reads back at the start of its day, which is
+  never later than the Silo play, so Silo does not record it as a second play.
+- Private diary entries may be missing from the day's page if Letterboxd shows
+  the plugin only public ones; the plugin cannot tell.
+
 ### Rate limits
 
 The plugin sends at most one request every 1.5 seconds across all connected
 accounts. Page reads and film lookups each spend at most 60 seconds per host
-page, so a large watchlist or ratings list spreads over many pages instead of hitting the host's
+page, so a large watchlist, ratings list, or diary spreads over many pages instead of hitting the host's
 two-minute call limit. A Cloudflare challenge pauses the connection for an hour,
 and a 429 for its `Retry-After`. The plugin never tries to solve a challenge.
+A batch of changes stops starting new ones 30 seconds before Silo's deadline
+for the call, since a diary play can take several requests; the rest are
+retried.
 
 ## Not yet supported
 
@@ -182,23 +249,31 @@ and a 429 for its `Retry-After`. The plugin never tries to solve a challenge.
 ## Troubleshooting
 
 `cmd/lbcheck` runs the plugin's client from the command line and shows whether a
-machine can read the watchlist and ratings and write with a cookie:
+machine can read the watchlist, ratings, and diary and write with a cookie:
 
 ```sh
 read -rs LETTERBOXD_COOKIE; export LETTERBOXD_COOKIE
 LETTERBOXD_USERNAME=... go run ./cmd/lbcheck
 LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -write -tmdb 11
 LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -rate -tmdb 11
+LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -log -tmdb 11
 ```
 
 `read -rs` asks for the cookie without showing it, which keeps it out of the
-shell history.
+shell history. The read also asks the rewatch check about the film of the
+oldest diary entry, which changes nothing.
 
 `-write` adds the given movie and removes it again, and refuses a movie that is
 already on the watchlist. `-rate` rates the given movie 3½ and then 4 stars,
 reads each rating back, and removes it; it refuses a movie that is already
 rated. Letterboxd keeps a rated movie marked watched after the rating is
-removed, so pick one you have seen. Without `-write` or `-rate`,
+removed, so pick one you have seen. `-log` logs the given movie in the diary
+for today the way the plugin does, rates the entry 3½ stars the way a later
+Silo rating would, reads it back, and then deletes the entry and the film
+rating it gave; it refuses a movie that is rated or already logged today, and
+the movie stays marked watched. The read alone also checks that the rewatch
+check reports the same rating as the ratings list. Without `-write`, `-rate`,
+or `-log`,
 `cmd/lbcheck` does not prove that the cookie works. `-debug` shows how the site's pages
 describe the session, with every value but the username redacted. With
 `LETTERBOXD_PASSWORD` instead of the cookie, `cmd/lbcheck` tries the password

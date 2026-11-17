@@ -13,7 +13,7 @@
       "type": "watch_sync_provider.v1",
       "id": "letterboxd",
       "display_name": "Letterboxd",
-      "description": "Two-way watchlist and rating sync for a Letterboxd account, movies only, with the watchlist in Letterboxd's own order.",
+      "description": "Two-way watchlist, rating, and diary sync for a Letterboxd account, movies only, with the watchlist in Letterboxd's own order.",
       "watch_sync_provider": {
         "auth_methods": [
           "WATCH_SYNC_AUTH_METHOD_API_KEY"
@@ -34,13 +34,24 @@
         "export_ratings": true,
         "rating_export_requires_watched": [
           "WATCH_SYNC_MEDIA_TYPE_MOVIE"
+        ],
+        "import_watched": true,
+        "export_watched": true,
+        "connection_settings": [
+          {
+            "key": "log_plays_in_diary",
+            "label": "Log plays in the Letterboxd diary",
+            "description": "Add each movie you finish in Silo to your Letterboxd diary, where your followers see it, with the rating you give it in Silo within a week. The plugin cannot remove diary entries. Plays from more than a day before you turn this on are not logged.",
+            "type": "WATCH_SYNC_CONNECTION_SETTING_TYPE_BOOLEAN",
+            "default_value": false
+          }
         ]
       },
       "config_schema": [
         {
           "key": "account",
           "title": "Connect to Letterboxd",
-          "description": "Letterboxd blocks sign-ins from servers, so the plugin uses a cookie from your browser. Sign in at letterboxd.com, copy the value of the letterboxd.user cookie, and paste it in the box labeled API key below. Enter your username here, not your email. Silo stores both encrypted. When Letterboxd stops accepting the cookie, connect again with a new one. The watchlist and ratings sync; the other options on this page have no effect for Letterboxd.",
+          "description": "Letterboxd blocks sign-ins from servers, so the plugin uses a cookie from your browser. Sign in at letterboxd.com, copy the value of the letterboxd.user cookie, and paste it in the box labeled API key below. Enter your username here, not your email. Silo stores both encrypted. When Letterboxd stops accepting the cookie, connect again with a new one. The watchlist, ratings, and diary sync; the other options on this page have no effect for Letterboxd.",
           "json_schema": "{\"type\":\"object\",\"required\":[\"username\"],\"properties\":{\"username\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":254}},\"additionalProperties\":false}",
           "required": true,
           "admin_form": {
@@ -62,9 +73,9 @@
   "category": "Watch Providers",
   "presentation": {
     "display_name": "Letterboxd Watch Provider",
-    "summary": "Sync a Silo profile's watchlist and ratings with Letterboxd, movies only.",
-    "description_markdown": "Imports the Letterboxd watchlist into Silo in Letterboxd's order, sends watchlist adds and removals made in Silo back to Letterboxd, syncs movie ratings both ways, and leaves series alone. Letterboxd has no public API for this, so the plugin uses the website the way a signed-in browser does.",
-    "setup_markdown": "Each Silo profile connects with its own Letterboxd account. Sign in at letterboxd.com in a browser and copy the value of the `letterboxd.user` cookie. Your username goes in the connection's username field and the cookie value in the field Silo labels API key. Silo stores both encrypted. The cookie gives full access to the account, so treat it like a password. When Letterboxd stops accepting it, connect again with a new one. The plugin needs no server-wide settings.\n\nTurn on **Sync watchlist removals** so a film removed on one side is removed on the other. Ratings sync both ways in half stars. A rating made in Silo reaches Letterboxd once the profile has finished the film, because rating a film on Letterboxd also marks it watched.\n\nThe first sync looks up every watchlisted and rated film once, at about 1.5 seconds per film; later syncs take seconds.",
+    "summary": "Sync a Silo profile's watchlist, ratings, and diary with Letterboxd, movies only.",
+    "description_markdown": "Imports the Letterboxd watchlist into Silo in Letterboxd's order, sends watchlist adds and removals made in Silo back to Letterboxd, syncs movie ratings both ways, imports diary entries as plays, logs plays finished in Silo in the diary, and leaves series alone. Letterboxd has no public API for this, so the plugin uses the website the way a signed-in browser does.",
+    "setup_markdown": "Each Silo profile connects with its own Letterboxd account. Sign in at letterboxd.com in a browser and copy the value of the `letterboxd.user` cookie. Your username goes in the connection's username field and the cookie value in the field Silo labels API key. Silo stores both encrypted. The cookie gives full access to the account, so treat it like a password. When Letterboxd stops accepting it, connect again with a new one. The plugin needs no server-wide settings.\n\nTurn on **Sync watchlist removals** so a film removed on one side is removed on the other. Ratings sync both ways in half stars. A rating made in Silo reaches Letterboxd once the profile has finished the film, because rating a film on Letterboxd also marks it watched.\n\nDiary entries come into Silo as plays. Turn on **Log plays in the Letterboxd diary** to have movies finished in Silo logged in the diary, dated in the Silo server's time zone, with the rating you give them in Silo within a week; plays from more than a day before you turn it on are not logged, so it does not add your whole history to the diary.\n\nThe first sync looks up every watchlisted and rated film once, at about 1.5 seconds per film; later syncs take seconds.",
     "homepage_url": "https://letterboxd.com",
     "source_url": "https://github.com/bulderi/silo-plugin-letterboxd",
     "support_url": "https://github.com/bulderi/silo-plugin-letterboxd/issues",

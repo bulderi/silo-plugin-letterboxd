@@ -33,6 +33,7 @@ const (
 // cached too, so TV entries and unlinked shorts are not refetched every sync.
 type cachedFilm struct {
 	LID       string `json:"l"`
+	UID       string `json:"u,omitempty"`
 	Slug      string `json:"s"`
 	Title     string `json:"t,omitempty"`
 	Year      int    `json:"y,omitempty"`
@@ -44,7 +45,7 @@ type cachedFilm struct {
 
 func cachedFromPage(f letterboxd.FilmPage, now time.Time) cachedFilm {
 	return cachedFilm{
-		LID: f.LID, Slug: f.Slug, Title: f.Title, Year: f.Year,
+		LID: f.LID, UID: f.UID, Slug: f.Slug, Title: f.Title, Year: f.Year,
 		TMDBID: f.TMDBID, TMDBType: f.TMDBType, IMDbID: f.IMDbID,
 		CheckedAt: now.Unix(),
 	}

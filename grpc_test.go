@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 	publicmanifest "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/manifest"
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/bulderi/silo-plugin-letterboxd/internal/fakesite"
 	"github.com/bulderi/silo-plugin-letterboxd/provider"
@@ -69,8 +71,8 @@ func (r *manifestRuntime) GetManifest(context.Context, *pluginv1.GetManifestRequ
 	return &pluginv1.GetManifestResponse{Manifest: r.manifest}, nil
 }
 
-// TestWatchSyncOverGRPC connects, reads and writes the watchlist and ratings
-// through the gRPC services the host calls.
+// TestWatchSyncOverGRPC connects, reads and writes the watchlist, ratings,
+// and diary through the gRPC services the host calls.
 func TestWatchSyncOverGRPC(t *testing.T) {
 	site := fakesite.New(t)
 	site.AddFilms(
@@ -160,6 +162,44 @@ func TestWatchSyncOverGRPC(t *testing.T) {
 	}
 	if got := site.Ratings()["bB2"]; got != 9 {
 		t.Fatalf("Letterboxd rating = %d, want 9", got)
+	}
+
+	// Diary: an entry reads as a play, and a play finished after the export
+	// started is logged.
+	site.SetDiary(fakesite.DiaryEntry{LID: "aA1", Date: "2026-11-01"})
+	watched, err := client.ListRemoteState(ctx, &pluginv1.WatchSyncListRemoteStateRequest{
+		Context:    auth,
+		StateKinds: []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHED},
+	})
+	if err != nil || watched.GetFault() != nil || watched.GetCompleteSnapshot() || len(watched.GetItems()) != 1 ||
+		watched.GetItems()[0].GetWatched().GetPlayCount() != 1 {
+		t.Fatalf("diary read: %v %v", err, watched)
+	}
+	played := time.Now().Add(time.Minute)
+	logging := &pluginv1.WatchSyncAuthenticatedContext{
+		CapabilityId: "letterboxd", Credentials: auth.GetCredentials(),
+		ConnectionSettings: map[string]string{provider.SettingLogPlays: "true"},
+	}
+	applied, err = client.ApplyEvents(ctx, &pluginv1.WatchSyncApplyEventsRequest{
+		Context: logging,
+		Events: []*pluginv1.WatchSyncEvent{{
+			EventId:        "play-northern-lights",
+			Operation:      pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_MARK_WATCHED,
+			WatchHistoryId: "play-northern-lights",
+			Completed:      true,
+			OccurredAt:     timestamppb.New(played),
+			Media: &pluginv1.WatchSyncMedia{
+				MediaType:   pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE,
+				ExternalIds: map[string]string{"tmdb": "5550002"},
+			},
+		}},
+	})
+	if err != nil || applied.GetFault() != nil ||
+		applied.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
+		t.Fatalf("diary write: %v %v", err, applied)
+	}
+	if diary := site.Diary(); len(diary) != 2 || diary[0].LID != "bB2" || diary[0].Date != played.Format("2006-01-02") {
+		t.Fatalf("diary = %+v", diary)
 	}
 
 	account, err := client.GetAccount(ctx, &pluginv1.WatchSyncGetAccountRequest{Context: auth})

@@ -1,6 +1,7 @@
 // Command lbcheck checks, against the live site and with the plugin's own
 // client, that this machine can use a Letterboxd cookie to read the watchlist
-// and ratings, and optionally add and remove one film or rate and unrate it. Run it on the Silo host when the
+// ratings, and diary, and optionally add and remove one film, rate and unrate
+// it, or log it in the diary. Run it on the Silo host when the
 // sync misbehaves. With LETTERBOXD_PASSWORD instead of the cookie it tries the
 // password sign-in that connections from before version 0.4.0 use.
 //
@@ -8,12 +9,16 @@
 // film that is already on the watchlist and removes the film it added. With
 // -rate it refuses a film that is already rated, rates it, reads the rating
 // back, and removes it. Letterboxd marks a rated film watched and keeps it
-// watched after the rating is removed, so pick a film you have seen.
+// watched after the rating is removed, so pick a film you have seen. With -log
+// it refuses a film that is rated or already has a diary entry today, logs it
+// for today, rates the entry, reads it back, and deletes the entry and the
+// rating again.
 //
 //	read -rs LETTERBOXD_COOKIE; export LETTERBOXD_COOKIE
 //	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck
 //	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -write -tmdb 11
 //	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -rate -tmdb 11
+//	LETTERBOXD_USERNAME=... go run ./cmd/lbcheck -log -tmdb 11
 package main
 
 import (
@@ -33,6 +38,7 @@ import (
 func main() {
 	write := flag.Bool("write", false, "also add the -tmdb film to the watchlist and remove it again")
 	rate := flag.Bool("rate", false, "also rate the -tmdb film, read the rating back, and remove it (the film stays marked watched)")
+	logEntry := flag.Bool("log", false, "also log the -tmdb film in the diary for today, rate the entry, read it back, and delete it again")
 	tmdbID := flag.Int("tmdb", 0, "TMDB id of a movie that is NOT on the watchlist (with -write) and NOT rated (with -rate)")
 	interval := flag.Duration("interval", 1500*time.Millisecond, "minimum time between requests")
 	debug = flag.Bool("debug", false, "after sign-in, show the page's person script with values redacted")
@@ -44,8 +50,8 @@ func main() {
 	if username == "" || (password == "" && rawCookie == "") {
 		fail("set LETTERBOXD_USERNAME and LETTERBOXD_COOKIE (or LETTERBOXD_PASSWORD)")
 	}
-	if (*write || *rate) && *tmdbID <= 0 {
-		fail("-write and -rate need -tmdb with a movie that is not on the watchlist and not rated")
+	if (*write || *rate || *logEntry) && *tmdbID <= 0 {
+		fail("-write, -rate, and -log need -tmdb with a movie that is not on the watchlist and not rated")
 	}
 
 	ctx := context.Background()
@@ -64,8 +70,8 @@ func main() {
 		if err := client.Home(ctx); err != nil {
 			fail("%v", err)
 		}
-		if !*write && !*rate {
-			fmt.Println("   only -write or -rate proves the cookie works")
+		if !*write && !*rate && !*logEntry {
+			fmt.Println("   only -write, -rate, or -log proves the cookie works")
 		}
 	} else {
 		step("sign in")
@@ -95,7 +101,17 @@ func main() {
 		fail("%v", err)
 	}
 	fmt.Printf("   %d rated films\n", len(ratings))
-	if !*write && !*rate {
+
+	step("read diary")
+	entries, err := readDiary(ctx, client, username)
+	if err != nil {
+		fail("%v", err)
+	}
+	fmt.Printf("   %d diary entries\n", len(entries))
+	if len(entries) > 0 {
+		checkFilmRelation(ctx, client, entries[len(entries)-1], ratings)
+	}
+	if !*write && !*rate && !*logEntry {
 		fmt.Println("ok")
 		return
 	}
@@ -109,6 +125,9 @@ func main() {
 	if *write && lids[film.LID] {
 		fail("this film is already on the watchlist; pick another so nothing of yours is removed")
 	}
+	if _, rated := ratings[film.LID]; *logEntry && rated {
+		fail("-log rates the entry, which changes the film's rating; pick a film you have not rated")
+	}
 	if _, rated := ratings[film.LID]; *rate && rated {
 		fail("this film is already rated; pick another so no rating of yours is removed")
 	}
@@ -118,7 +137,103 @@ func main() {
 	if *rate {
 		checkRatingWrite(ctx, client, username, film, ratings)
 	}
+	if *logEntry {
+		checkDiaryWrite(ctx, client, username, film)
+	}
 	fmt.Println("ok")
+}
+
+// checkDiaryWrite logs the film for today the way the plugin does, rates the
+// entry 3.5 stars as a later Silo rating would, reads it back, and then
+// deletes the entry and the film rating the entry gave, so nothing is left.
+func checkDiaryWrite(ctx context.Context, client *letterboxd.Client, username string, film letterboxd.FilmPage) {
+	step("log in the diary for today, rate the entry, and delete it")
+	today := time.Now()
+	logged, err := client.DiaryHasFilm(ctx, username, film.LID, today)
+	if err != nil {
+		fail("%v", err)
+	}
+	if logged {
+		fail("this film already has a diary entry today; pick another")
+	}
+	relation, err := client.FilmRelation(ctx, film.UID)
+	if err != nil {
+		fail("rewatch check: %v", err)
+	}
+	rewatch := !relation.Earliest.IsZero()
+	entry, err := client.LogFilm(ctx, film.LID, film.Slug, today, rewatch, relation.Rating)
+	if err != nil {
+		fail("log: %v", err)
+	}
+	if entry.ID == "" {
+		fail("log: the site took the entry but its answer could not be read; delete it at %s%s",
+			letterboxd.DefaultBaseURL, letterboxd.DiaryDayPath(username, today))
+	}
+	fmt.Printf("   logged entry %s (rewatch %v, rating %d/10)\n", entry.ID, entry.Rewatch, entry.Rating)
+	cleanup := func() {
+		if err := client.DeleteLogEntry(ctx, entry.ID); err != nil {
+			fail("delete: %v (delete it at %s%s)", err, letterboxd.DefaultBaseURL, letterboxd.DiaryDayPath(username, today))
+		}
+		if err := client.SetRating(ctx, film.LID, film.Slug, 0); err != nil {
+			fail("unrate: %v", err)
+		}
+	}
+	if logged, err = client.DiaryHasFilm(ctx, username, film.LID, today); err != nil || !logged {
+		cleanup()
+		fail("logged, but the day's diary page does not show it (err %v)", err)
+	}
+	if _, err := client.SetLogEntryRating(ctx, entry, 7); err != nil {
+		cleanup()
+		fail("rate the entry: %v", err)
+	}
+	read, err := client.GetLogEntry(ctx, entry.ID)
+	if err != nil || read.Rating != 7 || read.DiaryDate != entry.DiaryDate || read.Rewatch != entry.Rewatch {
+		cleanup()
+		fail("read back %+v (err %v), want rating 7 and the same date and rewatch flag", read, err)
+	}
+	fmt.Println("   rated the entry 7/10 and read it back")
+	cleanup()
+	if logged, err = client.DiaryHasFilm(ctx, username, film.LID, today); err != nil || logged {
+		fail("deleted, but the day's diary page still shows it (err %v)", err)
+	}
+	fmt.Println("   deleted the entry and the film rating; the film stays marked watched")
+}
+
+func readDiary(ctx context.Context, client *letterboxd.Client, username string) ([]letterboxd.Poster, error) {
+	reader := letterboxd.NewListReader(letterboxd.ListDiary, username)
+	for !reader.Done() {
+		if err := reader.ReadPage(ctx, client); err != nil {
+			return nil, err
+		}
+	}
+	return reader.Films()
+}
+
+// checkFilmRelation asks the Log form's question about the film of the
+// oldest diary entry, without writing anything. Its earliest entry must exist
+// and be no later than that entry, or the rewatch flag would be wrong, and its
+// rating must match the ratings list, or new entries would get a wrong one.
+func checkFilmRelation(ctx context.Context, client *letterboxd.Client, oldest letterboxd.Poster, ratings map[string]int) {
+	step("rewatch check for " + oldest.Name)
+	relation, err := client.FilmRelation(ctx, oldest.UID)
+	if err != nil {
+		fail("%v", err)
+	}
+	earliest := relation.Earliest
+	// A derived rating reads as none, so only a rating the check reports must
+	// match the list.
+	if relation.Rating != 0 && relation.Rating != ratings[oldest.LID] {
+		fail("the check gives rating %d, the ratings list %d", relation.Rating, ratings[oldest.LID])
+	}
+	entry, err := time.Parse("2006-01-02", oldest.WatchedOn)
+	if err != nil {
+		fail("diary entry date %q: %v", oldest.WatchedOn, err)
+	}
+	if earliest.IsZero() || earliest.After(entry) {
+		fail("earliest entry %v, want one on or before the diary entry of %s", earliest, oldest.WatchedOn)
+	}
+	fmt.Printf("   earliest entry %s, diary entry %s: a new entry would be a rewatch with rating %d/10\n",
+		earliest.Format("2006-01-02"), oldest.WatchedOn, relation.Rating)
 }
 
 func checkWatchlistWrite(ctx context.Context, client *letterboxd.Client, username string, film letterboxd.FilmPage, lids map[string]bool) {

@@ -12,6 +12,17 @@ Notable changes to the Letterboxd watch-provider plugin. Versions follow
   reports, like watchlist reads, and fail rather than return a partial list.
 - `cmd/lbcheck` reads the ratings, and `-rate` rates one film, reads it back,
   and removes the rating.
+- Diary entries come into Silo as plays. With the new connection setting **Log
+  plays in the Letterboxd diary**, off by default, movies finished in Silo are
+  logged in the diary, dated in the server's time zone, marked as a rewatch
+  when the diary already has an earlier entry for the film, and with the
+  rating: the film's rating on Letterboxd when the play is logged, and a
+  rating given or removed in Silo within a week afterwards. Entries changed by
+  the member are left alone. Plays from more than a day before the plugin
+  first sees one to log are skipped, and a film already logged that day is not
+  logged again.
+- `cmd/lbcheck` reads the diary, and `-log` logs one film for today, rates the
+  entry, reads it back, and deletes it again.
 
 ## 0.4.0 — 2026-11-09
 

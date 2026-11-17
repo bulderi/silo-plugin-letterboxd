@@ -21,6 +21,8 @@ const (
 	ListWatchlist ListKind = iota
 	// ListRatings is every film the member has rated, with the rating.
 	ListRatings
+	// ListDiary is every diary entry, newest first, with its date.
+	ListDiary
 )
 
 // ListReader reads a member's list one page at a time, so a caller can spread
@@ -43,8 +45,11 @@ func NewWatchlistReader(username string) *ListReader {
 // NewListReader starts at the first page of the member's list of that kind.
 func NewListReader(kind ListKind, username string) *ListReader {
 	start := WatchlistPath(username)
-	if kind == ListRatings {
+	switch kind {
+	case ListRatings:
 		start = RatingsPath(username)
+	case ListDiary:
+		start = DiaryPath(username)
 	}
 	return &ListReader{
 		kind:      kind,
@@ -75,9 +80,12 @@ func (r *ListReader) ReadPage(ctx context.Context, c *Client) error {
 	}
 	var page ListPage
 	var err error
-	if r.kind == ListRatings {
+	switch r.kind {
+	case ListRatings:
 		page, err = c.RatingsPage(ctx, r.next)
-	} else {
+	case ListDiary:
+		page, err = c.DiaryPage(ctx, r.next)
+	default:
 		page, err = c.WatchlistPage(ctx, r.next)
 	}
 	if err != nil {
@@ -89,8 +97,13 @@ func (r *ListReader) ReadPage(ctx context.Context, c *Client) error {
 	r.seenPaths[r.next] = true
 	r.pages++
 	for _, film := range page.Films {
-		if !r.seenFilms[film.LID] {
-			r.seenFilms[film.LID] = true
+		// A diary lists a film once per entry; other lists once per film.
+		key := film.LID
+		if r.kind == ListDiary {
+			key = film.ViewingID
+		}
+		if !r.seenFilms[key] {
+			r.seenFilms[key] = true
 			r.films = append(r.films, film)
 		}
 	}

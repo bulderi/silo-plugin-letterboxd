@@ -3,6 +3,8 @@ package provider
 import (
 	"fmt"
 	"strings"
+
+	"github.com/bulderi/silo-plugin-letterboxd/letterboxd"
 )
 
 // maxWarningBytes keeps each note under the host's 300-byte limit per page
@@ -13,10 +15,11 @@ const maxWarningBytes = 280
 // left out or served from older data. The host shows them with the sync run,
 // so someone can see why a Letterboxd entry did not reach Silo.
 type pageWarnings struct {
-	ratings  bool
+	kind     letterboxd.ListKind
 	tv       []string
 	unlinked []string
 	stale    []string
+	missing  []string
 }
 
 func (w *pageWarnings) list() []string {
@@ -30,11 +33,16 @@ func (w *pageWarnings) list() []string {
 			out = append(out, summarizeNames(fmt.Sprintf(many, len(names)), names))
 		}
 	}
-	if w.ratings {
+	switch w.kind {
+	case letterboxd.ListRatings:
 		add(w.tv,
 			"Skipped the rating of 1 Letterboxd film listed as TV, not a movie",
 			"Skipped the ratings of %d Letterboxd films listed as TV, not movies")
-	} else {
+	case letterboxd.ListDiary:
+		add(w.tv,
+			"Skipped the diary entries of 1 Letterboxd film listed as TV, not a movie",
+			"Skipped the diary entries of %d Letterboxd films listed as TV, not movies")
+	default:
 		add(w.tv,
 			"Skipped 1 Letterboxd watchlist entry listed as TV, not a movie",
 			"Skipped %d Letterboxd watchlist entries listed as TV, not movies")
@@ -45,6 +53,9 @@ func (w *pageWarnings) list() []string {
 	add(w.stale,
 		"Used saved IDs for 1 film whose Letterboxd page was not found",
 		"Used saved IDs for %d films whose Letterboxd page was not found")
+	add(w.missing,
+		"Skipped the diary entries of 1 film whose Letterboxd page was not found",
+		"Skipped the diary entries of %d films whose Letterboxd page was not found")
 	return out
 }
 

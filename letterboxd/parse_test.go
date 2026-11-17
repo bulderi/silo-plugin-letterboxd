@@ -72,7 +72,7 @@ func TestParseFilmPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := FilmPage{
-		LID: "aA1", Slug: "the-quiet-harbor", Title: "The Quiet Harbor", Year: 2019,
+		LID: "aA1", UID: "film:3001", Slug: "the-quiet-harbor", Title: "The Quiet Harbor", Year: 2019,
 		TMDBID: "5550001", TMDBType: "movie", IMDbID: "tt5550001",
 	}
 	if film != want {
@@ -215,5 +215,51 @@ func TestParseRatingsPageCountStaysInTheHeading(t *testing.T) {
 	}
 	if page.Total != -1 {
 		t.Fatalf("total = %d, want -1: the heading gives no count", page.Total)
+	}
+}
+
+func TestParseDiaryPage(t *testing.T) {
+	page, err := ParseDiaryPage(fixture(t, "diary_page1.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Poster{
+		{LID: "aA1", UID: "film:1001", Slug: "the-quiet-harbor", Name: "The Quiet Harbor (2019)", ViewingID: "9000000003", WatchedOn: "2026-11-16"},
+		{LID: "bB2", UID: "film:1002", Slug: "northern-lights-2021", Name: "Northern Lights (2021)", ViewingID: "9000000002", WatchedOn: "2026-11-15"},
+		{LID: "aA1", UID: "film:1001", Slug: "the-quiet-harbor", Name: "The Quiet Harbor (2019)", ViewingID: "9000000001", WatchedOn: "2026-10-02"},
+	}
+	if len(page.Films) != len(want) {
+		t.Fatalf("entries = %+v, want %+v (sidebar posters must be ignored)", page.Films, want)
+	}
+	for i := range want {
+		if page.Films[i] != want[i] {
+			t.Errorf("entry %d = %+v, want %+v", i, page.Films[i], want[i])
+		}
+	}
+	if page.NextPath != "/samplemember/diary/films/page/2/" {
+		t.Errorf("next = %q", page.NextPath)
+	}
+}
+
+// An empty diary is the site's own message; a day page's link to the next
+// day is not a next page of the diary.
+func TestParseEmptyDiaryPage(t *testing.T) {
+	page, err := ParseDiaryPage(fixture(t, "diary_empty.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Films) != 0 || page.Total != 0 || page.NextPath != "" {
+		t.Fatalf("page = %+v, want an empty diary with no next page", page)
+	}
+}
+
+func TestParseDiaryPageFailures(t *testing.T) {
+	if _, err := ParseDiaryPage(fixture(t, "diary_bad_row.html")); !errors.Is(err, ErrUnexpectedPage) {
+		t.Errorf("row without a date: err = %v, want ErrUnexpectedPage", err)
+	}
+	for _, name := range []string{"watchlist_page1.html", "watchlist_nogrid.html", "home_signed_out.html", "challenge.html"} {
+		if _, err := ParseDiaryPage(fixture(t, name)); !errors.Is(err, ErrUnexpectedPage) {
+			t.Errorf("%s: err = %v, want ErrUnexpectedPage", name, err)
+		}
 	}
 }

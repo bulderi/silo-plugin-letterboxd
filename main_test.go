@@ -35,9 +35,21 @@ func TestManifest(t *testing.T) {
 	if len(gate) != 1 || gate[0] != pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE {
 		t.Errorf("rating_export_requires_watched = %v, want movies", gate)
 	}
-	if ws.GetImportWatched() || ws.GetExportWatched() || ws.GetImportFavorites() ||
-		ws.GetScrobblePlayback() || ws.GetImportProgress() {
-		t.Error("only the watchlist and ratings are synced")
+	if !ws.GetImportWatched() || !ws.GetExportWatched() {
+		t.Error("diary import and export must both be advertised")
+	}
+	// Silo turns watched export on for every connection, so diary logging
+	// needs its own switch, off by default, under the key the provider reads.
+	settings := ws.GetConnectionSettings()
+	if len(settings) != 1 || settings[0].GetKey() != provider.SettingLogPlays ||
+		settings[0].GetType() != pluginv1.WatchSyncConnectionSettingType_WATCH_SYNC_CONNECTION_SETTING_TYPE_BOOLEAN ||
+		settings[0].GetDefaultValue() == nil || settings[0].GetDefaultValue().GetBoolValue() {
+		t.Errorf("connection settings = %v, want %s as a boolean that defaults to false", settings, provider.SettingLogPlays)
+	}
+	// A diary entry cannot be unlogged from a Silo unwatch, and Letterboxd
+	// has no playback to scrobble.
+	if ws.GetExportUnwatched() || ws.GetImportFavorites() || ws.GetScrobblePlayback() || ws.GetImportProgress() {
+		t.Error("only the watchlist, ratings, and diary are synced")
 	}
 	media := ws.GetSupportedMediaTypes()
 	if len(media) != 1 || media[0] != pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE {

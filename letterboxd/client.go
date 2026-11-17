@@ -1,6 +1,6 @@
 // Package letterboxd talks to the Letterboxd website the way a signed-in
 // browser does: HTML pages for reading, the site's own JSON endpoints for
-// watchlist and rating writes. Requests use a Chrome TLS and HTTP/2 fingerprint because
+// watchlist, rating, and diary writes. Requests use a Chrome TLS and HTTP/2 fingerprint because
 // the sign-in flow is behind Cloudflare.
 package letterboxd
 
@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -434,6 +436,301 @@ func (c *Client) RatingsPage(ctx context.Context, path string) (ListPage, error)
 	return page, nil
 }
 
+// DiaryPath is the first page of a member's film diary.
+func DiaryPath(username string) string {
+	return "/" + url.PathEscape(strings.ToLower(username)) + "/diary/films/"
+}
+
+// DiaryDayPath is the page of a member's diary entries for one date.
+func DiaryDayPath(username string, day time.Time) string {
+	return "/" + url.PathEscape(strings.ToLower(username)) + day.Format("/diary/films/for/2006/01/02/")
+}
+
+// DiaryPage loads one page of a member's diary: a path from DiaryPath, a
+// previous page's NextPath, or DiaryDayPath.
+func (c *Client) DiaryPage(ctx context.Context, path string) (ListPage, error) {
+	if !strings.HasPrefix(path, "/") || strings.Contains(path, "//") {
+		return ListPage{}, fmt.Errorf("diary path %q: %w", path, ErrUnexpectedPage)
+	}
+	resp, err := c.get(ctx, path, false)
+	if err != nil {
+		return ListPage{}, err
+	}
+	page, err := ParseDiaryPage(resp.body)
+	if err != nil {
+		return ListPage{}, fmt.Errorf("diary %s: %w", path, err)
+	}
+	return page, nil
+}
+
+// DiaryHasFilm reports whether the member's diary has an entry for the film
+// on that date.
+func (c *Client) DiaryHasFilm(ctx context.Context, username, lid string, day time.Time) (bool, error) {
+	page, err := c.DiaryPage(ctx, DiaryDayPath(username, day))
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range page.Films {
+		if entry.LID == lid {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// filmUIDPattern is a film's site-wide id, as poster tiles carry it.
+var filmUIDPattern = regexp.MustCompile(`^film:[A-Za-z0-9]{1,20}$`)
+
+// Relation is what the site's Log form learns about a member and a film
+// before it shows the form.
+type Relation struct {
+	// Earliest is the date of the member's earliest diary entry for the film,
+	// or the zero time when there is none. The form ticks "rewatch" when it
+	// is on or before the new entry's date.
+	Earliest time.Time
+	// Rating is the member's own rating of the film from 1 to 10, or 0 for
+	// none. The form fills it in as the new entry's rating. A rating the site
+	// derived rather than the member set (isDerivedRating) counts as none, so
+	// logging never turns it into one the member gave.
+	Rating int
+}
+
+// FilmRelation asks the endpoint the site's Log form asks, by the film's UID.
+func (c *Client) FilmRelation(ctx context.Context, uid string) (Relation, error) {
+	if !filmUIDPattern.MatchString(uid) {
+		return Relation{}, fmt.Errorf("film uid %q: %w", uid, ErrUnexpectedPage)
+	}
+	resp, err := c.send(ctx, request{
+		method: http.MethodGet,
+		path:   "/s/check-viewingable-relation?viewingableUID=" + url.QueryEscape(uid),
+		headers: map[string]string{
+			"accept":           "application/json, text/javascript, */*; q=0.01",
+			"x-requested-with": "XMLHttpRequest",
+		},
+	})
+	if err != nil {
+		return Relation{}, err
+	}
+	switch resp.status {
+	case http.StatusOK:
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// Not ErrSignedOut: whether the session is dead is for a write and
+		// the cookie check to decide, not this read.
+		return Relation{}, ErrForbidden
+	case http.StatusNotFound:
+		return Relation{}, ErrNotFound
+	default:
+		return Relation{}, &StatusError{Method: http.MethodGet, Path: "/s/check-viewingable-relation", Status: resp.status}
+	}
+	var raw struct {
+		Result              bool     `json:"result"`
+		Rating              *float64 `json:"rating"`
+		Derived             bool     `json:"isDerivedRating"`
+		EarliestViewingDate *string  `json:"earliestViewingDate"`
+	}
+	if err := json.Unmarshal(resp.body, &raw); err != nil || !raw.Result {
+		return Relation{}, fmt.Errorf("film relation: %w", ErrUnexpectedPage)
+	}
+	var relation Relation
+	if raw.Rating != nil {
+		rating := int(math.Round(*raw.Rating))
+		if rating < 0 || rating > 10 || float64(rating) != *raw.Rating {
+			return Relation{}, fmt.Errorf("film relation rating: %w", ErrUnexpectedPage)
+		}
+		if !raw.Derived {
+			relation.Rating = rating
+		}
+	}
+	if raw.EarliestViewingDate != nil && *raw.EarliestViewingDate != "" {
+		date := *raw.EarliestViewingDate
+		if len(date) < 10 {
+			return Relation{}, fmt.Errorf("film relation date: %w", ErrUnexpectedPage)
+		}
+		day, err := time.Parse("2006-01-02", date[:10])
+		if err != nil {
+			return Relation{}, fmt.Errorf("film relation date: %w", ErrUnexpectedPage)
+		}
+		relation.Earliest = day
+	}
+	return relation, nil
+}
+
+// LogEntry is a diary entry as the site's API returns it.
+type LogEntry struct {
+	// ID is the entry's LID, which the read, update, and delete calls take.
+	ID string
+	// FilmLID is the logged film's LID.
+	FilmLID   string
+	DiaryDate string // YYYY-MM-DD
+	Rewatch   bool
+	// Rating is the entry's rating from 1 to 10, or 0 for none.
+	Rating int
+	Like   bool
+	// Tags and Review report whether the member added any.
+	Tags   int
+	Review bool
+	// Updated is the entry's whenUpdated, which changes whenever the entry is
+	// edited, on the site or through the API.
+	Updated string
+}
+
+// Plain reports whether the entry holds nothing but its date, rewatch flag,
+// and rating, which is all SetLogEntryRating keeps.
+func (e LogEntry) Plain() bool { return !e.Like && e.Tags == 0 && !e.Review }
+
+type logEntryJSON struct {
+	ID         string `json:"id"`
+	Production struct {
+		ID string `json:"id"`
+	} `json:"production"`
+	DiaryDetails *struct {
+		DiaryDate string `json:"diaryDate"`
+		Rewatch   bool   `json:"rewatch"`
+	} `json:"diaryDetails"`
+	Tags2       []json.RawMessage `json:"tags2"`
+	Review      json.RawMessage   `json:"review"`
+	Rating      *float64          `json:"rating"`
+	Like        bool              `json:"like"`
+	WhenUpdated string            `json:"whenUpdated"`
+}
+
+func (j logEntryJSON) entry() (LogEntry, error) {
+	if !ValidLID(j.ID) || j.DiaryDetails == nil || j.WhenUpdated == "" {
+		return LogEntry{}, fmt.Errorf("log entry: %w", ErrUnexpectedPage)
+	}
+	entry := LogEntry{
+		ID: j.ID, FilmLID: j.Production.ID,
+		DiaryDate: j.DiaryDetails.DiaryDate, Rewatch: j.DiaryDetails.Rewatch,
+		Like: j.Like, Tags: len(j.Tags2), Updated: j.WhenUpdated,
+		Review: len(j.Review) > 0 && string(j.Review) != "null",
+	}
+	if j.Rating != nil {
+		entry.Rating = int(math.Round(*j.Rating * 2))
+		if entry.Rating < 0 || entry.Rating > 10 {
+			return LogEntry{}, fmt.Errorf("log entry rating: %w", ErrUnexpectedPage)
+		}
+	}
+	return entry, nil
+}
+
+// LogFilm adds a diary entry for a film on a date, with the rating (1 to 10,
+// or 0 for none) and no review, tags, or like, as the site's own "Log" form
+// does, and returns the new entry: the zero LogEntry, with no error, when the
+// site took the entry but its answer cannot be read. A rating on an entry also
+// becomes the film's rating. Unlike the other writes it is not desired state:
+// each call adds an entry, so callers check DiaryHasFilm first.
+func (c *Client) LogFilm(ctx context.Context, lid, filmSlug string, day time.Time, rewatch bool, rating int) (LogEntry, error) {
+	if !ValidLID(lid) {
+		return LogEntry{}, fmt.Errorf("invalid LID %q", lid)
+	}
+	value, err := ratingValue(rating)
+	if err != nil {
+		return LogEntry{}, err
+	}
+	ratingField := ""
+	if rating > 0 {
+		ratingField = `,"rating":` + value
+	}
+	body := fmt.Sprintf(`{"productionId":%q,"diaryDetails":{"diaryDate":%q,"rewatch":%t},"tags":[]%s,"like":false}`,
+		lid, day.Format("2006-01-02"), rewatch, ratingField)
+	raw, err := c.sendJSON(ctx, http.MethodPost, "/api/v0/production-log-entries", filmSlug, body)
+	if err != nil {
+		return LogEntry{}, err
+	}
+	var created struct {
+		LogEntry logEntryJSON `json:"logEntry"`
+	}
+	if json.Unmarshal(raw, &created) != nil {
+		return LogEntry{}, nil
+	}
+	entry, err := created.LogEntry.entry()
+	if err != nil {
+		return LogEntry{}, nil
+	}
+	return entry, nil
+}
+
+// GetLogEntry reads a diary entry by its LID.
+func (c *Client) GetLogEntry(ctx context.Context, id string) (LogEntry, error) {
+	if !ValidLID(id) {
+		return LogEntry{}, fmt.Errorf("invalid log entry id %q", id)
+	}
+	resp, err := c.send(ctx, request{
+		method:  http.MethodGet,
+		path:    "/api/v0/log-entry/" + id,
+		headers: map[string]string{"accept": "application/json"},
+	})
+	if err != nil {
+		return LogEntry{}, err
+	}
+	switch resp.status {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return LogEntry{}, ErrNotFound
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return LogEntry{}, ErrForbidden
+	default:
+		return LogEntry{}, &StatusError{Method: http.MethodGet, Path: "/api/v0/log-entry/", Status: resp.status}
+	}
+	var entry logEntryJSON
+	if err := json.Unmarshal(resp.body, &entry); err != nil {
+		return LogEntry{}, fmt.Errorf("log entry: %w", ErrUnexpectedPage)
+	}
+	return entry.entry()
+}
+
+// SetLogEntryRating sets a plain entry's rating (1 to 10, or 0 to clear it),
+// keeping its date and rewatch flag, and returns the updated entry. The update
+// replaces the entry's review, tags, and like, so it refuses an entry that
+// has any of them rather than erase them.
+func (c *Client) SetLogEntryRating(ctx context.Context, entry LogEntry, rating int) (LogEntry, error) {
+	if !ValidLID(entry.ID) {
+		return LogEntry{}, fmt.Errorf("invalid log entry id %q", entry.ID)
+	}
+	if !entry.Plain() {
+		return LogEntry{}, errors.New("the entry has a review, tags, or a like that an update would erase")
+	}
+	value, err := ratingValue(rating)
+	if err != nil {
+		return LogEntry{}, err
+	}
+	body := fmt.Sprintf(`{"diaryDetails":{"diaryDate":%q,"rewatch":%t},"review":null,"tags":[],"rating":%s,"like":false,"privacyPolicy":null}`,
+		entry.DiaryDate, entry.Rewatch, value)
+	raw, err := c.sendJSON(ctx, http.MethodPatch, "/api/v0/production-log-entry/"+entry.ID, "", body)
+	if err != nil {
+		return LogEntry{}, err
+	}
+	var updated struct {
+		LogEntry logEntryJSON `json:"logEntry"`
+	}
+	if err := json.Unmarshal(raw, &updated); err != nil {
+		return LogEntry{}, fmt.Errorf("log entry answer: %w", ErrUnexpectedPage)
+	}
+	return updated.LogEntry.entry()
+}
+
+// DeleteLogEntry removes a diary entry. The plugin never removes entries;
+// cmd/lbcheck uses it to remove the entry it logged.
+func (c *Client) DeleteLogEntry(ctx context.Context, id string) error {
+	if !ValidLID(id) {
+		return fmt.Errorf("invalid log entry id %q", id)
+	}
+	_, err := c.sendJSON(ctx, http.MethodDelete, "/api/v0/production-log-entry/"+id, "", "")
+	return err
+}
+
+// ratingValue is a rating from 1 to 10 as the site's JSON takes it, in half
+// stars, or null for 0, which clears it.
+func ratingValue(rating int) (string, error) {
+	if rating < 0 || rating > 10 {
+		return "", fmt.Errorf("rating %d is outside 0 to 10", rating)
+	}
+	if rating == 0 {
+		return "null", nil
+	}
+	return strconv.FormatFloat(float64(rating)/2, 'f', -1, 64), nil
+}
+
 // SetInWatchlist adds (in=true) or removes a film by LID. It sets the desired
 // state, so repeating it is harmless.
 func (c *Client) SetInWatchlist(ctx context.Context, lid, filmSlug string, in bool) error {
@@ -444,12 +741,9 @@ func (c *Client) SetInWatchlist(ctx context.Context, lid, filmSlug string, in bo
 // stars, or clears it when rating is 0. It sets the desired state, so
 // repeating it is harmless. Rating a film also marks it watched on Letterboxd.
 func (c *Client) SetRating(ctx context.Context, lid, filmSlug string, rating int) error {
-	if rating < 0 || rating > 10 {
-		return fmt.Errorf("rating %d is outside 0 to 10", rating)
-	}
-	value := "null"
-	if rating > 0 {
-		value = strconv.FormatFloat(float64(rating)/2, 'f', -1, 64)
+	value, err := ratingValue(rating)
+	if err != nil {
+		return err
 	}
 	return c.patchMe(ctx, "/api/v0/me/rate/", lid, filmSlug, `{"rating":`+value+`}`)
 }
@@ -460,43 +754,43 @@ func (c *Client) patchMe(ctx context.Context, prefix, lid, filmSlug, body string
 	if !ValidLID(lid) {
 		return fmt.Errorf("invalid LID %q", lid)
 	}
+	_, err := c.sendJSON(ctx, http.MethodPatch, prefix+lid, filmSlug, body)
+	return err
+}
+
+// sendJSON sends a JSON write to the site's own API with the CSRF token and
+// returns the answer's body.
+func (c *Client) sendJSON(ctx context.Context, method, path, filmSlug, body string) ([]byte, error) {
 	if c.cookie(csrfCookie) == "" {
 		if err := c.Home(ctx); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	csrf := c.cookie(csrfCookie)
 	if csrf == "" {
-		return fmt.Errorf("no csrf cookie: %w", ErrUnexpectedPage)
+		return nil, fmt.Errorf("no csrf cookie: %w", ErrUnexpectedPage)
 	}
 	referer := c.abs("/")
 	if filmSlug != "" {
 		referer = c.abs("/film/" + url.PathEscape(filmSlug) + "/")
 	}
-	path := prefix + lid
-	resp, err := c.send(ctx, request{
-		method:  http.MethodPatch,
-		path:    path,
-		body:    body,
-		referer: referer,
-		headers: map[string]string{
-			"content-type": "application/json; charset=UTF-8",
-			"accept":       "*/*",
-			"x-csrf-token": csrf,
-		},
-	})
+	headers := map[string]string{"accept": "*/*", "x-csrf-token": csrf}
+	if body != "" {
+		headers["content-type"] = "application/json; charset=UTF-8"
+	}
+	resp, err := c.send(ctx, request{method: method, path: path, body: body, referer: referer, headers: headers})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	switch resp.status {
-	case http.StatusOK, http.StatusNoContent:
-		return nil
+	case http.StatusOK, http.StatusCreated, http.StatusNoContent:
+		return resp.body, nil
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return ErrSignedOut
+		return nil, ErrSignedOut
 	case http.StatusNotFound:
-		return ErrNotFound
+		return nil, ErrNotFound
 	default:
-		return &StatusError{Method: http.MethodPatch, Path: path, Status: resp.status}
+		return nil, &StatusError{Method: method, Path: path, Status: resp.status}
 	}
 }
 

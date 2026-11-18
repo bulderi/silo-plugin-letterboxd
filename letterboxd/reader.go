@@ -77,7 +77,7 @@ func (r *ListReader) Done() bool { return r.next == "" }
 func (r *ListReader) PagesRead() int { return r.pages }
 
 // ReadPage reads the next page. On error the reader is unchanged, so the same
-// page can be read again, for example after signing in.
+// page can be read again.
 func (r *ListReader) ReadPage(ctx context.Context, c *Client) error {
 	if r.Done() {
 		return nil

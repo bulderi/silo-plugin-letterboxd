@@ -37,7 +37,6 @@ const (
 	csrfValue      = "csrf-token-1"
 	sessionCookie  = "letterboxd.user.CURRENT"
 	rememberCookie = "letterboxd.user"
-	signedInCookie = "letterboxd.signed.in.as"
 	// UserAgent is the User-Agent every request must carry.
 	UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
 )
@@ -64,8 +63,6 @@ type Site struct {
 
 	mu             sync.Mutex
 	username       string
-	email          string
-	password       string
 	films          map[string]Film // by slug
 	watchlist      []string        // LIDs, newest first
 	ratings        map[string]int  // by LID, 1 to 10
@@ -98,15 +95,12 @@ type Site struct {
 	requests       []string
 }
 
-// New starts a fake site for member "samplemember" (email
-// samplemember@example.com, password "correct horse").
+// New starts a fake site for member "samplemember".
 func New(t testing.TB) *Site {
 	t.Helper()
 	s := &Site{
 		t:          t,
 		username:   "samplemember",
-		email:      "samplemember@example.com",
-		password:   "correct horse",
 		films:      map[string]Film{},
 		pageSize:   28,
 		sessions:   map[string]bool{},
@@ -126,12 +120,6 @@ func New(t testing.TB) *Site {
 
 // Username is the member's canonical username.
 func (s *Site) Username() string { return s.username }
-
-// Email is the member's email, which also signs in.
-func (s *Site) Email() string { return s.email }
-
-// Password is the member's password.
-func (s *Site) Password() string { return s.password }
 
 // AddFilms registers films.
 func (s *Site) AddFilms(films ...Film) {
@@ -336,9 +324,6 @@ func (s *Site) SetPageSize(n int) { s.mu.Lock(); s.pageSize = n; s.mu.Unlock() }
 // SetPrivate makes the watchlist visible only when signed in.
 func (s *Site) SetPrivate(private bool) { s.mu.Lock(); s.private = private; s.mu.Unlock() }
 
-// SetPassword changes the password (existing sessions stay valid).
-func (s *Site) SetPassword(p string) { s.mu.Lock(); s.password = p; s.mu.Unlock() }
-
 // RotateSessionOnWrite makes every watchlist write issue a new session cookie.
 func (s *Site) RotateSessionOnWrite(on bool) { s.mu.Lock(); s.rotate = on; s.mu.Unlock() }
 
@@ -433,10 +418,6 @@ func (s *Site) route(w http.ResponseWriter, r *http.Request) {
 		s.writePage(w, signedIn, "Letterboxd", `<body class="home"></body>`)
 	case path == "/settings/":
 		s.settingsPage(w, signedIn)
-	case path == "/sign-in/":
-		_, _ = w.Write(Fixture(s.t, "signin.html"))
-	case path == "/user/login.do" && r.Method == http.MethodPost:
-		s.login(w, r)
 	case path == watchlistRoot || strings.HasPrefix(path, watchlistRoot+"page/"):
 		s.watchlistPage(w, path, watchlistRoot, signedIn)
 	case path == ratingsRoot || strings.HasPrefix(path, ratingsRoot+"page/"):
@@ -496,23 +477,6 @@ func (s *Site) newSession(w http.ResponseWriter) {
 	id := "session-" + strconv.Itoa(s.sessionN)
 	s.sessions[id] = true
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/"})
-}
-
-func (s *Site) login(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	if r.PostForm.Get("__csrf") != csrfValue {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-	user := r.PostForm.Get("username")
-	if (user != s.username && user != s.email) || r.PostForm.Get("password") != s.password {
-		_, _ = io.WriteString(w, `{"result":"error","messages":["Your credentials don't match."]}`)
-		return
-	}
-	s.newSession(w)
-	http.SetCookie(w, &http.Cookie{Name: rememberCookie, Value: s.newRemember(), Path: "/"})
-	http.SetCookie(w, &http.Cookie{Name: signedInCookie, Value: s.username, Path: "/"})
-	_, _ = io.WriteString(w, `{"result":"success","messages":[]}`)
 }
 
 func (s *Site) watchlistPage(w http.ResponseWriter, path, root string, signedIn bool) {

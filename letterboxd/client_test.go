@@ -35,58 +35,12 @@ func TestUserAgentMatchesFake(t *testing.T) {
 	}
 }
 
-func TestLoginAndSession(t *testing.T) {
-	site, client := newSite(t)
-	ctx := context.Background()
-	if err := client.Login(ctx, site.Username(), site.Password()); err != nil {
-		t.Fatal(err)
-	}
-	if got := client.Session(); got.Current == "" || got.Remember == "" {
-		t.Fatalf("session = %+v, want both cookies", got)
-	}
-	if got := client.SignedInAs(); got != site.Username() {
-		t.Fatalf("signed in as %q, want %q", got, site.Username())
-	}
-	// Pages are guest templates even when signed in; the session shows in
-	// what it may do.
-	if err := client.SetInWatchlist(ctx, "aA1", "", true); err != nil {
-		t.Fatalf("signed-in write: %v", err)
-	}
-}
-
-func TestLoginWithEmail(t *testing.T) {
-	site, client := newSite(t)
-	if err := client.Login(context.Background(), site.Email(), site.Password()); err != nil {
-		t.Fatal(err)
-	}
-	if got := client.SignedInAs(); got != site.Username() {
-		t.Fatalf("signed in as %q, want the canonical username %q", got, site.Username())
-	}
-}
-
-func TestLoginRejected(t *testing.T) {
-	site, client := newSite(t)
-	if err := client.Login(context.Background(), site.Username(), "wrong"); !errors.Is(err, ErrLoginRejected) {
-		t.Fatalf("err = %v, want ErrLoginRejected", err)
-	}
-}
-
-func TestLoginChallenged(t *testing.T) {
-	site, client := newSite(t)
-	site.Challenge("/sign-in/", true)
-	if err := client.Login(context.Background(), site.Username(), site.Password()); !errors.Is(err, ErrChallenge) {
-		t.Fatalf("err = %v, want ErrChallenge", err)
-	}
-}
-
 func TestSessionRestoredFromCookies(t *testing.T) {
 	site, first := newSite(t)
 	site.SetPrivate(true)
 	site.SetWatchlist("aA1")
 	ctx := context.Background()
-	if err := first.Login(ctx, site.Username(), site.Password()); err != nil {
-		t.Fatal(err)
-	}
+	first.SetSession(Session{Remember: site.IssueRememberCookie()})
 	second, err := New(Options{BaseURL: site.URL})
 	if err != nil {
 		t.Fatal(err)
@@ -172,9 +126,7 @@ func TestFilmByExternalID(t *testing.T) {
 func TestSetInWatchlist(t *testing.T) {
 	site, client := newSite(t)
 	ctx := context.Background()
-	if err := client.Login(ctx, site.Username(), site.Password()); err != nil {
-		t.Fatal(err)
-	}
+	client.SetSession(Session{Remember: site.IssueRememberCookie()})
 	if err := client.SetInWatchlist(ctx, "aA1", "the-quiet-harbor", true); err != nil {
 		t.Fatal(err)
 	}
@@ -204,9 +156,7 @@ func TestSetInWatchlistErrors(t *testing.T) {
 	if err := client.SetInWatchlist(ctx, "aA1", "", true); !errors.Is(err, ErrSignedOut) {
 		t.Fatalf("signed out: err = %v, want ErrSignedOut (Letterboxd's 403 is not a challenge)", err)
 	}
-	if err := client.Login(ctx, site.Username(), site.Password()); err != nil {
-		t.Fatal(err)
-	}
+	client.SetSession(Session{Remember: site.IssueRememberCookie()})
 	if err := client.SetInWatchlist(ctx, "nOpe", "", true); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown film: err = %v, want ErrNotFound", err)
 	}

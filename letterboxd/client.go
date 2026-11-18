@@ -1,7 +1,7 @@
 // Package letterboxd talks to the Letterboxd website the way a signed-in
 // browser does: HTML pages for reading, the site's own JSON endpoints for
 // watchlist, rating, and diary writes. Requests use a Chrome TLS and HTTP/2 fingerprint because
-// the sign-in flow is behind Cloudflare.
+// the site sits behind Cloudflare.
 package letterboxd
 
 import (
@@ -29,11 +29,10 @@ const (
 	userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
 	secChUA   = `"Chromium";v="152", "Google Chrome";v="152", "Not A(Brand";v="99"`
 
-	maxRedirects     = 10
-	csrfCookie       = "com.xk72.webparts.csrf"
-	sessionCookie    = "letterboxd.user.CURRENT"
-	rememberCookie   = "letterboxd.user"
-	signedInAsCookie = "letterboxd.signed.in.as"
+	maxRedirects   = 10
+	csrfCookie     = "com.xk72.webparts.csrf"
+	sessionCookie  = "letterboxd.user.CURRENT"
+	rememberCookie = "letterboxd.user"
 
 	maxBodyBytes = 8 << 20
 )
@@ -49,8 +48,6 @@ var (
 	ErrForbidden = errors.New("letterboxd denied access to the page")
 	// ErrSignedOut means the session is not (or no longer) signed in.
 	ErrSignedOut = errors.New("letterboxd session is not signed in")
-	// ErrLoginRejected means Letterboxd refused the username or password.
-	ErrLoginRejected = errors.New("letterboxd rejected the sign-in")
 )
 
 // RateLimitError is a 429 answer.
@@ -140,9 +137,6 @@ type Session struct {
 	Current string
 	// Remember is the long-lived remember-me cookie (letterboxd.user).
 	Remember string
-	// CSRF is the double-submit token cookie (com.xk72.webparts.csrf).
-	// Keeping it saves a page load before each write.
-	CSRF string
 }
 
 // Client is a single account's browser-like session. It is not safe for
@@ -231,9 +225,6 @@ func (c *Client) SetSession(s Session) {
 	if s.Remember != "" {
 		cookies = append(cookies, &http.Cookie{Name: rememberCookie, Value: s.Remember, Path: "/"})
 	}
-	if s.CSRF != "" {
-		cookies = append(cookies, &http.Cookie{Name: csrfCookie, Value: s.CSRF, Path: "/"})
-	}
 	if len(cookies) > 0 {
 		c.http.SetCookies(c.rootURL(), cookies)
 	}
@@ -245,77 +236,7 @@ func (c *Client) Session() Session {
 	return Session{
 		Current:  c.cookie(sessionCookie),
 		Remember: c.cookie(rememberCookie),
-		CSRF:     c.cookie(csrfCookie),
 	}
-}
-
-// ResetSession drops the session cookies, so a new sign-in starts as a guest
-// rather than with a session the site may still partly honor.
-func (c *Client) ResetSession() {
-	var expired []*http.Cookie
-	for _, name := range []string{sessionCookie, rememberCookie, signedInAsCookie, csrfCookie} {
-		expired = append(expired, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1})
-	}
-	c.http.SetCookies(c.rootURL(), expired)
-}
-
-// Login signs in with a username and password.
-func (c *Client) Login(ctx context.Context, username, password string) error {
-	if _, err := c.get(ctx, "/sign-in/", false); err != nil {
-		return err
-	}
-	csrf := c.cookie(csrfCookie)
-	if csrf == "" {
-		return fmt.Errorf("sign-in page set no csrf cookie: %w", ErrUnexpectedPage)
-	}
-	form := url.Values{
-		"__csrf":   {csrf},
-		"username": {username},
-		"password": {password},
-		"remember": {"true"},
-	}
-	resp, err := c.send(ctx, request{
-		method:  http.MethodPost,
-		path:    "/user/login.do",
-		body:    form.Encode(),
-		referer: c.abs("/sign-in/"),
-		headers: map[string]string{
-			"content-type":     "application/x-www-form-urlencoded; charset=UTF-8",
-			"accept":           "application/json, text/javascript, */*; q=0.01",
-			"x-requested-with": "XMLHttpRequest",
-		},
-	})
-	if err != nil {
-		return err
-	}
-	if resp.status != http.StatusOK {
-		return &StatusError{Method: http.MethodPost, Path: "/user/login.do", Status: resp.status}
-	}
-	var result struct {
-		Result string `json:"result"`
-	}
-	if err := json.Unmarshal(resp.body, &result); err != nil {
-		return fmt.Errorf("decode sign-in response: %w", ErrUnexpectedPage)
-	}
-	if result.Result != "success" {
-		return ErrLoginRejected
-	}
-	if c.cookie(sessionCookie) == "" {
-		return fmt.Errorf("sign-in set no session cookie: %w", ErrUnexpectedPage)
-	}
-	return nil
-}
-
-// SignedInAs is the canonical username the site set in the
-// letterboxd.signed.in.as cookie at sign-in, or "" when there is none. It is
-// only a hint for the UI: it can outlive the session, so it proves who signed
-// in, not that the session is still valid.
-func (c *Client) SignedInAs() string {
-	value := c.cookie(signedInAsCookie)
-	if unescaped, err := url.QueryUnescape(value); err == nil {
-		value = unescaped
-	}
-	return strings.TrimSpace(value)
 }
 
 // IsSignedInAs reports whether the session belongs to username. Most pages are

@@ -96,17 +96,6 @@ func newHarness(t *testing.T, opts ...func(*Options)) *harness {
 	return &harness{t: t, site: site, store: store, p: New(o)}
 }
 
-// connect stores a password connection the way versions before 0.4.0 did, so
-// the tests that use it prove those stored connections keep working.
-func (h *harness) connect() {
-	h.t.Helper()
-	creds, err := h.p.signIn(context.Background(), h.site.Username(), h.site.Password())
-	if err != nil {
-		h.t.Fatalf("connect: %v", err)
-	}
-	h.creds = creds.proto()
-}
-
 // connectCookie connects the way a new connection does and returns the cookie.
 func (h *harness) connectCookie() string {
 	h.t.Helper()
@@ -130,14 +119,6 @@ func (h *harness) exchange(username, apiKey string) *pluginv1.WatchSyncCredentia
 		h.t.Fatal(err)
 	}
 	return resp
-}
-
-// assertNoSignIn fails if anything touched the Cloudflare-protected sign-in.
-func (h *harness) assertNoSignIn() {
-	h.t.Helper()
-	if n := h.site.CountRequests("GET /sign-in/") + h.site.CountRequests("POST /user/login.do"); n != 0 {
-		h.t.Fatalf("%d requests reached the sign-in page: %v", n, h.site.Requests())
-	}
 }
 
 func (h *harness) authContext() *pluginv1.WatchSyncAuthenticatedContext {
@@ -278,7 +259,6 @@ func TestExchangeAPIKeyStoresTheCookie(t *testing.T) {
 	if resp.GetFault() != nil {
 		t.Fatal(resp.GetFault())
 	}
-	h.assertNoSignIn()
 	if got := resp.GetAccount(); got.GetUsername() != h.site.Username() || got.GetExternalSubject() != h.site.Username() {
 		t.Fatalf("account = %v", got)
 	}
@@ -290,12 +270,6 @@ func TestExchangeAPIKeyStoresTheCookie(t *testing.T) {
 	attrs := creds.GetSecretAttributes()
 	if attrs[attrUsername] != h.site.Username() {
 		t.Fatalf("username attribute = %q", attrs[attrUsername])
-	}
-	if _, ok := attrs[attrPassword]; ok {
-		t.Fatal("a cookie connection must store no password")
-	}
-	if _, ok := attrs[attrLogin]; ok {
-		t.Fatal("a cookie connection must store no login")
 	}
 	stored, ok := credentialsFromContext(&pluginv1.WatchSyncAuthenticatedContext{Credentials: creds})
 	if !ok || stored.session.Remember != cookie {
@@ -342,7 +316,6 @@ func TestExchangeAPIKeyFaults(t *testing.T) {
 			if strings.Contains(resp.GetFault().GetSafeMessage(), "cookie-value") {
 				t.Fatal("fault message leaks the cookie")
 			}
-			h.assertNoSignIn()
 		})
 	}
 }
@@ -392,7 +365,6 @@ func TestCookieConnectionReadsAndWrites(t *testing.T) {
 	if got := strings.Join(h.site.Watchlist(), ","); got != "aA1,gG7,cC3" {
 		t.Fatalf("watchlist = %s", got)
 	}
-	h.assertNoSignIn()
 }
 
 // A cookie connection cannot sign in again to replace a stale CSRF token, so
@@ -401,9 +373,6 @@ func TestCookieConnectionReadsAndWrites(t *testing.T) {
 func TestCookieConnectionLoadsAFreshCSRFForEachCall(t *testing.T) {
 	h := newHarness(t)
 	h.connectCookie()
-	if _, ok := h.creds.GetSecretAttributes()[attrCSRF]; ok {
-		t.Fatal("a cookie connection must store no CSRF token")
-	}
 	for i, film := range []string{"aA1", "bB2"} {
 		resp := h.apply(movieEvent(film, opAdd, "letterboxd:"+film, nil))
 		if resp.GetFault() != nil || resp.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
@@ -437,7 +406,6 @@ func TestCookieExpiredOnPrivateRead(t *testing.T) {
 	if !strings.Contains(fault.GetSafeMessage(), "new one") {
 		t.Fatalf("message = %q, want it to ask for a new cookie", fault.GetSafeMessage())
 	}
-	h.assertNoSignIn()
 }
 
 func TestCookieExpiredOnPublicReadStillReads(t *testing.T) {
@@ -468,7 +436,6 @@ func TestCookieExpiredOnWrite(t *testing.T) {
 	if got := strings.Join(h.site.Watchlist(), ","); got != "cC3" {
 		t.Fatalf("watchlist = %s", got)
 	}
-	h.assertNoSignIn()
 }
 
 // One film the site refuses says nothing about the cookie when another write
@@ -493,7 +460,6 @@ func TestCookieRefusedFilmDoesNotFailBatch(t *testing.T) {
 			got["bB2"] != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
 			t.Fatalf("order %v: statuses = %v", order, got)
 		}
-		h.assertNoSignIn()
 	}
 }
 
@@ -571,9 +537,6 @@ func TestCookieConnectionKeepsANewSessionCookie(t *testing.T) {
 	if updated.GetAccessToken() == "" || updated.GetAccessToken() == cookie || updated.GetRefreshToken() != cookie {
 		t.Fatalf("access = %q, refresh = %q", updated.GetAccessToken(), updated.GetRefreshToken())
 	}
-	if _, ok := updated.GetSecretAttributes()[attrPassword]; ok {
-		t.Fatal("updated credentials must not gain a password")
-	}
 }
 
 func TestRefreshCookieConnectionReturnsWhatItHas(t *testing.T) {
@@ -595,35 +558,11 @@ func TestRefreshCookieConnectionReturnsWhatItHas(t *testing.T) {
 	}
 }
 
-// Password connections stored by earlier versions still carry what re-login
-// needs, including the canonical username for an email login.
-func TestStoredPasswordConnection(t *testing.T) {
-	h := newHarness(t)
-	creds, err := h.p.signIn(context.Background(), h.site.Email(), h.site.Password())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if creds.account.Username != h.site.Username() {
-		t.Fatalf("username = %q, want the canonical name for an email login", creds.account.Username)
-	}
-	proto := creds.proto()
-	if proto.GetAccessToken() == "" || proto.GetRefreshToken() == "" {
-		t.Fatalf("credentials missing session cookies: %v", proto)
-	}
-	if attrs := proto.GetSecretAttributes(); attrs[attrUsername] != h.site.Username() || attrs[attrLogin] != h.site.Email() || attrs[attrPassword] != h.site.Password() {
-		t.Fatal("credentials must carry username, login and password for re-login")
-	}
-	stored, ok := credentialsFromContext(&pluginv1.WatchSyncAuthenticatedContext{Credentials: proto})
-	if !ok || stored.session.Current != creds.session.Current || stored.session.Remember != creds.session.Remember {
-		t.Fatalf("stored = %+v, ok = %v", stored, ok)
-	}
-}
-
 func TestListWatchlistAcrossPages(t *testing.T) {
 	h := newHarness(t)
 	h.site.SetPageSize(2)
 	h.site.SetWatchlist("gG7", "eE5", "aA1", "fF6", "bB2", "cC3", "dD4")
-	h.connect()
+	h.connectCookie()
 
 	items, _, fault := h.listAll()
 	if fault != nil {
@@ -651,7 +590,7 @@ func TestListWatchlistSplitsSlowLookupsOverPages(t *testing.T) {
 	clock := &stepClock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), step: time.Second}
 	h := newHarness(t, func(o *Options) { o.Now = clock.Now; o.PageBudget = 4 * time.Second })
 	h.site.SetWatchlist("aA1", "bB2", "cC3", "dD4", "gG7")
-	h.connect()
+	h.connectCookie()
 
 	items, pages, fault := h.listAll()
 	if fault != nil {
@@ -678,7 +617,7 @@ func TestListWatchlistIsASnapshot(t *testing.T) {
 	clock := &stepClock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), step: time.Second}
 	h := newHarness(t, func(o *Options) { o.Now = clock.Now; o.PageBudget = 3 * time.Second })
 	h.site.SetWatchlist("aA1", "bB2", "cC3", "dD4")
-	h.connect()
+	h.connectCookie()
 
 	req := &pluginv1.WatchSyncListRemoteStateRequest{
 		Context:    h.authContext(),
@@ -712,7 +651,7 @@ func TestListWatchlistChangedWhileReadingPages(t *testing.T) {
 	h := newHarness(t, func(o *Options) { o.Now = clock.Now; o.PageBudget = time.Second })
 	h.site.SetPageSize(2)
 	h.site.SetWatchlist("aA1", "bB2", "cC3", "dD4")
-	h.connect()
+	h.connectCookie()
 
 	req := &pluginv1.WatchSyncListRemoteStateRequest{
 		Context:    h.authContext(),
@@ -744,7 +683,7 @@ func TestListWatchlistReadsPagesAcrossCalls(t *testing.T) {
 	h := newHarness(t, func(o *Options) { o.Now = clock.Now; o.PageBudget = 2 * time.Second })
 	h.site.SetPageSize(1)
 	h.site.SetWatchlist("aA1", "bB2", "cC3", "dD4", "gG7")
-	h.connect()
+	h.connectCookie()
 	if _, _, fault := h.listAll(); fault != nil { // fills the film cache
 		t.Fatal(fault)
 	}
@@ -769,7 +708,7 @@ func TestListWatchlistReadsPagesAcrossCalls(t *testing.T) {
 func TestListEmptyWatchlist(t *testing.T) {
 	h := newHarness(t)
 	h.site.SetWatchlist()
-	h.connect()
+	h.connectCookie()
 	items, _, fault := h.listAll()
 	if fault != nil || len(items) != 0 {
 		t.Fatalf("items %v fault %v, want an empty complete snapshot", keys(items), fault)
@@ -813,7 +752,7 @@ func TestListWatchlistFailuresNeverReturnPartialLists(t *testing.T) {
 			h := newHarness(t)
 			h.site.SetPageSize(2)
 			h.site.SetWatchlist("aA1", "bB2", "cC3", "dD4")
-			h.connect()
+			h.connectCookie()
 			tc.setup(h.site)
 			items, _, fault := h.listAll()
 			if fault.GetCode() != tc.want || items != nil {
@@ -826,7 +765,7 @@ func TestListWatchlistFailuresNeverReturnPartialLists(t *testing.T) {
 func TestListWatchlistCachesLookupsBeforeAFailure(t *testing.T) {
 	h := newHarness(t)
 	h.site.SetWatchlist("aA1", "bB2", "cC3")
-	h.connect()
+	h.connectCookie()
 	h.site.Challenge("/film/a-long-winter/", true)
 	if _, _, fault := h.listAll(); fault == nil {
 		t.Fatal("want a fault")
@@ -844,7 +783,7 @@ func TestListWatchlistCachesLookupsBeforeAFailure(t *testing.T) {
 func TestFilmCachePersistsAcrossRestarts(t *testing.T) {
 	h := newHarness(t)
 	h.site.SetWatchlist("aA1", "bB2", "eE5")
-	h.connect()
+	h.connectCookie()
 	if _, _, fault := h.listAll(); fault != nil {
 		t.Fatal(fault)
 	}
@@ -860,56 +799,10 @@ func TestFilmCachePersistsAcrossRestarts(t *testing.T) {
 	}
 }
 
-func TestListWatchlistSignsInAgainWhenSessionExpired(t *testing.T) {
-	h := newHarness(t)
-	h.site.SetPrivate(true)
-	h.site.SetWatchlist("aA1")
-	h.connect()
-	oldSession := h.creds.GetAccessToken()
-	h.site.ExpireSessions()
-	items, _, fault := h.listAll()
-	if fault != nil || len(items) != 1 {
-		t.Fatalf("items %v fault %v", keys(items), fault)
-	}
-	if h.creds.GetAccessToken() == oldSession || h.creds.GetSecretAttributes()[attrPassword] == "" {
-		t.Fatal("the new session must be returned as updated credentials, keeping the account")
-	}
-}
-
-func TestListWatchlistPasswordChanged(t *testing.T) {
-	h := newHarness(t)
-	h.site.SetPrivate(true)
-	h.site.SetWatchlist("aA1")
-	h.connect()
-	h.site.ExpireSessions()
-	h.site.SetPassword("new password")
-	_, _, fault := h.listAll()
-	if fault.GetCode() != pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL {
-		t.Fatalf("fault = %v, want INVALID_CREDENTIAL", fault)
-	}
-}
-
-// A public watchlist reads without a session, so an expired session costs no
-// sign-in until the plugin writes.
-func TestListPublicWatchlistNeedsNoSession(t *testing.T) {
-	h := newHarness(t)
-	h.site.SetWatchlist("aA1", "bB2")
-	h.connect()
-	h.site.ExpireSessions()
-	before := h.site.CountRequests("POST /user/login.do")
-	items, _, fault := h.listAll()
-	if fault != nil || len(items) != 2 {
-		t.Fatalf("items %v fault %v", keys(items), fault)
-	}
-	if n := h.site.CountRequests("POST /user/login.do") - before; n != 0 {
-		t.Fatalf("signed in %d times for a public read", n)
-	}
-}
-
 func TestListRemoteStateRejectsBadRequests(t *testing.T) {
 	h := newHarness(t)
 	h.site.SetWatchlist("aA1")
-	h.connect()
+	h.connectCookie()
 	watchlist := []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST}
 	cases := map[string]*pluginv1.WatchSyncListRemoteStateRequest{
 		"other kind": {Context: h.authContext(), StateKinds: []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_PROGRESS}},
@@ -934,7 +827,7 @@ func TestPageTokenBelongsToOneAccount(t *testing.T) {
 	clock := &stepClock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), step: time.Second}
 	h := newHarness(t, func(o *Options) { o.Now = clock.Now; o.PageBudget = 2 * time.Second })
 	h.site.SetWatchlist("aA1", "bB2", "cC3", "dD4")
-	h.connect()
+	h.connectCookie()
 	watchlist := []pluginv1.WatchSyncRemoteStateKind{pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST}
 	resp, _ := h.p.ListRemoteState(context.Background(), &pluginv1.WatchSyncListRemoteStateRequest{Context: h.authContext(), StateKinds: watchlist})
 	if resp.GetNextPageToken() == "" {
@@ -942,7 +835,7 @@ func TestPageTokenBelongsToOneAccount(t *testing.T) {
 	}
 	other := &pluginv1.WatchSyncCredentials{
 		AccessToken:      "x",
-		SecretAttributes: map[string]string{attrUsername: "someoneelse", attrPassword: "p"},
+		SecretAttributes: map[string]string{attrUsername: "someoneelse"},
 	}
 	resp, _ = h.p.ListRemoteState(context.Background(), &pluginv1.WatchSyncListRemoteStateRequest{
 		Context:    &pluginv1.WatchSyncAuthenticatedContext{Credentials: other},
@@ -956,7 +849,7 @@ func TestPageTokenBelongsToOneAccount(t *testing.T) {
 func TestApplyEventsAddAndRemove(t *testing.T) {
 	h := newHarness(t)
 	h.site.SetWatchlist("bB2")
-	h.connect()
+	h.connectCookie()
 
 	resp := h.apply(
 		movieEvent("add-1", opAdd, "tmdb:5550001", map[string]string{"tmdb": "5550001", "imdb": "tt5550001"}),
@@ -985,7 +878,7 @@ func TestApplyEventsAddAndRemove(t *testing.T) {
 // removing a film that is not there is harmless.
 func TestApplyEventsSequences(t *testing.T) {
 	h := newHarness(t)
-	h.connect()
+	h.connectCookie()
 	ids := map[string]string{"tmdb": "5550004"}
 	resp := h.apply(
 		movieEvent("1", opAdd, "", ids),
@@ -1008,7 +901,7 @@ func TestApplyEventsSequences(t *testing.T) {
 
 func TestApplyEventsRejections(t *testing.T) {
 	h := newHarness(t)
-	h.connect()
+	h.connectCookie()
 	series := movieEvent("series", opAdd, "", map[string]string{"tmdb": "5550005"})
 	series.Media.MediaType = pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_SERIES
 	resp := h.apply(
@@ -1033,7 +926,7 @@ func TestApplyEventsRejections(t *testing.T) {
 
 func TestApplyEventsRateLimitPausesTheRest(t *testing.T) {
 	h := newHarness(t)
-	h.connect()
+	h.connectCookie()
 	h.site.RateLimit("/api/v0/me/watchlist/aA1", true)
 	resp := h.apply(
 		movieEvent("1", opAdd, "letterboxd:aA1", nil),
@@ -1051,44 +944,12 @@ func TestApplyEventsRateLimitPausesTheRest(t *testing.T) {
 	}
 }
 
-func TestApplyEventsSessionHandling(t *testing.T) {
-	h := newHarness(t)
-	h.connect()
-	h.site.RotateSessionOnWrite(true)
-	resp := h.apply(movieEvent("1", opAdd, "letterboxd:aA1", nil))
-	if resp.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED || resp.GetUpdatedCredentials() == nil {
-		t.Fatalf("rotated session not returned: %v", resp)
-	}
-	h.site.RotateSessionOnWrite(false)
-
-	h.site.ExpireSessions()
-	resp = h.apply(movieEvent("2", opAdd, "letterboxd:bB2", nil))
-	if resp.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED || resp.GetUpdatedCredentials() == nil {
-		t.Fatalf("expired session not renewed: %v", resp)
-	}
-
-	h.site.ExpireSessions()
-	h.site.SetPassword("new password")
-	resp = h.apply(movieEvent("3", opAdd, "letterboxd:cC3", nil))
-	if resp.GetFault().GetCode() != pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL {
-		t.Fatalf("fault = %v, want INVALID_CREDENTIAL", resp.GetFault())
-	}
-	if got := strings.Join(h.site.Watchlist(), ","); got != "bB2,aA1" {
-		t.Fatalf("watchlist = %s", got)
-	}
-}
-
 func TestRefreshAndGetAccount(t *testing.T) {
 	h := newHarness(t)
-	h.connect()
+	h.connectCookie()
 	account, err := h.p.GetAccount(context.Background(), &pluginv1.WatchSyncGetAccountRequest{Context: h.authContext()})
 	if err != nil || account.GetAccount().GetUsername() != h.site.Username() {
 		t.Fatalf("account = %v, %v", account, err)
-	}
-	old := h.creds.GetAccessToken()
-	refreshed, err := h.p.RefreshCredentials(context.Background(), &pluginv1.WatchSyncRefreshCredentialsRequest{Context: h.authContext()})
-	if err != nil || refreshed.GetFault() != nil || refreshed.GetCredentials().GetAccessToken() == old {
-		t.Fatalf("refresh = %v, %v", refreshed, err)
 	}
 	empty := &pluginv1.WatchSyncAuthenticatedContext{}
 	if resp, _ := h.p.RefreshCredentials(context.Background(), &pluginv1.WatchSyncRefreshCredentialsRequest{Context: empty}); resp.GetFault() == nil {
@@ -1137,57 +998,11 @@ func TestFilmCacheExpiry(t *testing.T) {
 	}
 }
 
-// A film Letterboxd refuses even right after a fresh sign-in is that film's
-// problem: the rest of the batch goes through and the account stays valid.
-func TestApplyEventsRefusedFilmDoesNotFailBatch(t *testing.T) {
-	h := newHarness(t)
-	h.connect()
-	h.site.RefuseWrite("aA1", true)
-	resp := h.apply(
-		movieEvent("1", opAdd, "letterboxd:aA1", nil),
-		movieEvent("2", opAdd, "letterboxd:bB2", nil),
-	)
-	if resp.GetFault() != nil {
-		t.Fatalf("response fault %v; one refused film must not fail the connection", resp.GetFault())
-	}
-	got := map[string]pluginv1.WatchSyncApplyStatus{}
-	for _, r := range resp.GetResults() {
-		got[r.GetEventId()] = r.GetStatus()
-	}
-	if got["1"] != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_RETRY ||
-		got["2"] != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
-		t.Fatalf("statuses = %v", got)
-	}
-	if n := h.site.CountRequests("POST /user/login.do"); n != 2 {
-		t.Fatalf("sign-ins = %d, want 2 (connect, then one retry for the refusal)", n)
-	}
-	if strings.Join(h.site.Watchlist(), ",") != "bB2" {
-		t.Fatalf("watchlist = %v", h.site.Watchlist())
-	}
-}
-
-// The CSRF cookie is kept with the session, so a write does not first load
-// the front page.
-func TestApplyEventsReusesStoredCSRF(t *testing.T) {
-	h := newHarness(t)
-	h.connect()
-	if h.creds.GetSecretAttributes()[attrCSRF] == "" {
-		t.Fatal("connect did not store the CSRF cookie")
-	}
-	resp := h.apply(movieEvent("1", opAdd, "letterboxd:aA1", nil))
-	if resp.GetResults()[0].GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
-		t.Fatalf("resp = %v", resp)
-	}
-	if n := h.site.CountRequests("GET /"); n != 1 {
-		t.Fatalf("GET requests = %d (%v), want only the connect's sign-in page", n, h.site.Requests())
-	}
-}
-
 func TestListWatchlistUsesStaleCacheWhenFilmPageGone(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	h := newHarness(t, func(o *Options) { o.Now = func() time.Time { return now } })
 	h.site.SetWatchlist("aA1", "bB2")
-	h.connect()
+	h.connectCookie()
 	if _, _, fault := h.listAll(); fault != nil {
 		t.Fatal(fault)
 	}
@@ -1303,7 +1118,7 @@ func TestListWatchlistReportsSkippedEntries(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	h := newHarness(t, func(o *Options) { o.Now = func() time.Time { return now } })
 	h.site.SetWatchlist("aA1", "eE5", "fF6")
-	h.connect()
+	h.connectCookie()
 	if _, _, fault := h.listAll(); fault != nil {
 		t.Fatal(fault)
 	}

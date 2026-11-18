@@ -98,7 +98,6 @@ func TestListDiary(t *testing.T) {
 		!strings.Contains(joined, "Skipped 1 film that has no TMDB or IMDb link") {
 		t.Errorf("warnings = %q", warnings)
 	}
-	h.assertNoSignIn()
 }
 
 func TestListEmptyDiary(t *testing.T) {

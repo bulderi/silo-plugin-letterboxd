@@ -17,10 +17,8 @@ CSRF tokens; replace them with placeholders.
 
 - **Credentials.** Silo stores each connection's Letterboxd username and
   cookies encrypted and passes them to the plugin only for the duration of a
-  call. The `letterboxd.user` cookie gives full access to the account. A
-  connection made before version 0.4.0 also holds a password, used only to sign
-  in again when a session expires. The plugin never writes the password, the
-  cookies, or page contents to logs or error messages.
+  call. The `letterboxd.user` cookie gives full access to the account. The
+  plugin never writes the cookies or page contents to logs or error messages.
 - **Network access.** The plugin talks only to `letterboxd.com`. A
   development build can be given a FlareSolverr service at build time; it
   then also sends that service the addresses of challenged public pages,

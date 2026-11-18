@@ -20,62 +20,37 @@ const (
 	SettingLogPlays = "log_plays_in_diary"
 
 	attrUsername = "username"
-	attrLogin    = "login"
-	attrPassword = "password"
-	attrCSRF     = "csrf"
 	tokenType    = "letterboxd-session"
 )
 
-// account is what the plugin needs to act for one Letterboxd member. The host
-// stores it encrypted in the connection's credential bundle.
-type account struct {
-	// Username is the member's username, which is what watchlist URLs use.
-	Username string
-	// Login and Password exist only on connections made before the plugin
-	// switched to cookies. A cookie connection has neither and cannot sign in
-	// again by itself.
-	Login    string
-	Password string
-}
-
-// canSignIn reports whether the connection can sign in again by itself, which
-// only a connection from before the switch to cookies can.
-func (a account) canSignIn() bool { return a.Password != "" }
-
-// credentials is the stored form of a connection.
+// credentials is the stored form of a connection: the member's username,
+// which is what list URLs use, and the session cookies. The host stores it
+// encrypted in the connection's credential bundle.
 type credentials struct {
-	account account
-	session letterboxd.Session
+	username string
+	session  letterboxd.Session
 }
 
 // credentialsFromContext reads the stored credential bundle. ok is false when
-// the bundle is missing the account, which means the connection predates the
-// plugin or was damaged; the user has to reconnect.
+// the bundle is missing the username or the cookies, which means the
+// connection predates the plugin or was damaged; the user has to reconnect.
 func credentialsFromContext(ctx *pluginv1.WatchSyncAuthenticatedContext) (credentials, bool) {
 	stored := ctx.GetCredentials()
 	attrs := stored.GetSecretAttributes()
-	acc := account{
-		Username: strings.TrimSpace(attrs[attrUsername]),
-		Login:    strings.TrimSpace(attrs[attrLogin]),
-		Password: attrs[attrPassword],
-	}
-	if acc.Login == "" {
-		acc.Login = acc.Username
-	}
+	username := strings.TrimSpace(attrs[attrUsername])
 	current, remember := stored.GetAccessToken(), stored.GetRefreshToken()
 	if current == remember {
 		// proto stored the remember-me cookie twice; there is no session cookie.
 		current = ""
 	}
-	if acc.Username == "" || (!acc.canSignIn() && current == "" && remember == "") {
+	if username == "" || (current == "" && remember == "") {
 		return credentials{}, false
 	}
 	return credentials{
-		account: acc,
+		username: username,
 		session: letterboxd.Session{
 			Current:  current,
 			Remember: remember,
-			CSRF:     attrs[attrCSRF],
 		},
 	}, true
 }
@@ -85,14 +60,7 @@ func credentialsFromContext(ctx *pluginv1.WatchSyncAuthenticatedContext) (creden
 // without an access token and the site sets no session cookie for a request
 // carrying only the remember-me cookie, so that cookie then fills both fields.
 func (c credentials) proto() *pluginv1.WatchSyncCredentials {
-	attrs := map[string]string{attrUsername: c.account.Username}
-	if c.account.canSignIn() {
-		attrs[attrLogin] = c.account.Login
-		attrs[attrPassword] = c.account.Password
-	}
-	if c.session.CSRF != "" {
-		attrs[attrCSRF] = c.session.CSRF
-	}
+	attrs := map[string]string{attrUsername: c.username}
 	access := c.session.Current
 	if access == "" {
 		access = c.session.Remember

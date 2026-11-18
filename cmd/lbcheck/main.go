@@ -2,10 +2,9 @@
 // client, that this machine can use a Letterboxd cookie to read the watchlist
 // ratings, and diary, and optionally add and remove one film, rate and unrate
 // it, or log it in the diary. Run it on the Silo host when the
-// sync misbehaves. With LETTERBOXD_PASSWORD instead of the cookie it tries the
-// password sign-in that connections from before version 0.4.0 use.
+// sync misbehaves.
 //
-// It never prints the password or cookie values. With -write it refuses a
+// It never prints the cookie value. With -write it refuses a
 // film that is already on the watchlist and removes the film it added. With
 // -rate it refuses a film that is already rated, rates it, reads the rating
 // back, and removes it. Letterboxd marks a rated film watched and keeps it
@@ -44,14 +43,13 @@ func main() {
 	tmdbID := flag.Int("tmdb", 0, "TMDB id of a movie that is NOT on the watchlist (with -write) and NOT rated (with -rate)")
 	interval := flag.Duration("interval", 1500*time.Millisecond, "minimum time between requests")
 	solver := flag.String("flaresolverr", "", "FlareSolverr URL, such as http://localhost:8191, that loads challenged public pages")
-	debug = flag.Bool("debug", false, "after sign-in, show the page's person script with values redacted")
+	debug = flag.Bool("debug", false, "after loading the front page, show the page's person script with values redacted")
 	flag.Parse()
 
 	username := strings.TrimSpace(os.Getenv("LETTERBOXD_USERNAME"))
-	password := os.Getenv("LETTERBOXD_PASSWORD")
 	rawCookie := os.Getenv("LETTERBOXD_COOKIE")
-	if username == "" || (password == "" && rawCookie == "") {
-		fail("set LETTERBOXD_USERNAME and LETTERBOXD_COOKIE (or LETTERBOXD_PASSWORD)")
+	if username == "" || rawCookie == "" {
+		fail("set LETTERBOXD_USERNAME and LETTERBOXD_COOKIE")
 	}
 	if (*write || *rate || *rerate || *logEntry) && *tmdbID <= 0 {
 		fail("-write, -rate, -rerate, and -log need -tmdb")
@@ -69,28 +67,17 @@ func main() {
 		fail("%v", err)
 	}
 
-	if rawCookie != "" {
-		cookie, ok := letterboxd.ParseRememberCookie(rawCookie)
-		if !ok {
-			fail("LETTERBOXD_COOKIE is not the value of the letterboxd.user cookie")
-		}
-		step("load front page with the cookie")
-		client.SetSession(letterboxd.Session{Remember: cookie})
-		if err := client.Home(ctx); err != nil {
-			fail("%v", err)
-		}
-		if !*write && !*rate && !*rerate && !*logEntry {
-			fmt.Println("   only -write, -rate, -rerate, or -log proves the cookie works")
-		}
-	} else {
-		step("sign in")
-		if err := client.Login(ctx, username, password); err != nil {
-			fail("%v", err)
-		}
-		if username = client.SignedInAs(); username == "" {
-			fail("sign-in set no letterboxd.signed.in.as cookie")
-		}
-		fmt.Printf("   signed in as %s\n", username)
+	cookie, ok := letterboxd.ParseRememberCookie(rawCookie)
+	if !ok {
+		fail("LETTERBOXD_COOKIE is not the value of the letterboxd.user cookie")
+	}
+	step("load front page with the cookie")
+	client.SetSession(letterboxd.Session{Remember: cookie})
+	if err := client.Home(ctx); err != nil {
+		fail("%v", err)
+	}
+	if !*write && !*rate && !*rerate && !*logEntry {
+		fmt.Println("   only -write, -rate, -rerate, or -log proves the cookie works")
 	}
 	if *debug {
 		debugPage(ctx, client, "/", username)

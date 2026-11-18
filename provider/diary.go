@@ -54,31 +54,31 @@ func (p *Provider) diaryDay(watchedOn string) (time.Time, bool) {
 // logging is on. Plays from more than diaryGrace before the account's
 // diary export started are skipped, and so is a play whose film already has an entry that day, so
 // a retried event never adds a second entry.
-func (p *Provider) applyWatched(ctx context.Context, sess *session, event *pluginv1.WatchSyncEvent) (*pluginv1.WatchSyncApplyResult, *pluginv1.WatchSyncFault) {
+func (p *Provider) applyWatched(ctx context.Context, sess *session, event *pluginv1.WatchSyncEvent) *pluginv1.WatchSyncApplyResult {
 	if event.GetMedia().GetMediaType() != pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_MOVIE {
-		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST, "Letterboxd sync handles movies only."), nil
+		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST, "Letterboxd sync handles movies only.")
 	}
 	if event.GetOccurredAt() == nil {
-		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST, "The play has no time to date the diary entry with."), nil
+		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_REQUEST, "The play has no time to date the diary entry with.")
 	}
 	if !sess.logPlays {
-		return applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_NO_CHANGE, nil), nil
+		return applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_NO_CHANGE, nil)
 	}
 	watchedAt := event.GetOccurredAt().AsTime()
-	username := sess.creds.account.Username
+	username := sess.creds.username
 	start, err := p.accounts.diaryStart(ctx, username)
 	if err != nil {
 		p.logger.Warn("letterboxd diary start unavailable", "error", err)
 		return applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_RETRY,
-			newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY, "The plugin could not read its saved state; the play will be retried.")), nil
+			newFault(pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY, "The plugin could not read its saved state; the play will be retried."))
 	}
 	if watchedAt.Before(start.Add(-diaryGrace)) {
-		return applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_NO_CHANGE, nil), nil
+		return applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_NO_CHANGE, nil)
 	}
 
 	target, err := p.targetForEvent(ctx, sess, event)
 	if err == nil && target.tv {
-		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_PERMANENT, "Letterboxd lists this title as TV, not a movie."), nil
+		return rejected(event, pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_PERMANENT, "Letterboxd lists this title as TV, not a movie.")
 	}
 	day := watchedAt.In(p.location)
 	if err == nil {
@@ -90,7 +90,7 @@ func (p *Provider) applyWatched(ctx context.Context, sess *session, event *plugi
 			err = errDiaryRead
 		}
 		if err == nil && logged {
-			return applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_NO_CHANGE, nil), nil
+			return applyResult(event, pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_NO_CHANGE, nil)
 		}
 	}
 	var relation letterboxd.Relation
@@ -101,7 +101,7 @@ func (p *Provider) applyWatched(ctx context.Context, sess *session, event *plugi
 		date, _ := time.Parse("2006-01-02", day.Format("2006-01-02"))
 		rewatch := !relation.Earliest.IsZero() && !relation.Earliest.After(date)
 		var entry letterboxd.LogEntry
-		err = p.writeFilm(ctx, sess, func() error {
+		err = writeFilm(sess, func() error {
 			var logErr error
 			entry, logErr = sess.client.LogFilm(ctx, target.lid, target.slug, day, rewatch, relation.Rating)
 			return logErr
@@ -169,7 +169,7 @@ func (p *Provider) rateLoggedEntries(ctx context.Context, sess *session, lid str
 	if !sess.logPlays {
 		return nil
 	}
-	username := sess.creds.account.Username
+	username := sess.creds.username
 	record, found, err := p.accounts.newestEntry(ctx, username, lid)
 	if err != nil {
 		// The rating itself still goes through; only the entry misses it.

@@ -81,7 +81,6 @@ func TestListRatingsAcrossPages(t *testing.T) {
 	if n := h.site.CountRequests("GET /samplemember/watchlist/"); n != 0 {
 		t.Errorf("a ratings read loaded the watchlist %d times", n)
 	}
-	h.assertNoSignIn()
 }
 
 func TestListEmptyRatings(t *testing.T) {
@@ -233,7 +232,6 @@ func TestRatingWriteWithDeadCookie(t *testing.T) {
 	if _, ok := h.site.Ratings()["aA1"]; ok {
 		t.Fatal("a refused write changed the rating")
 	}
-	h.assertNoSignIn()
 }
 
 // A page token from a watchlist traversal cannot continue a ratings read.

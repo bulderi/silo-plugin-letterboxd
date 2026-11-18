@@ -35,6 +35,10 @@ Notable changes to the Letterboxd watch-provider plugin. Versions follow
   that read is served. A full read still runs once a day.
 - A write loads the film's page for its CSRF cookie instead of the front
   page, which Cloudflare challenges far more often.
+- Password sign-in is gone. Connections made with a password before 0.4.0
+  stop working and must be connected again with a cookie; Cloudflare already
+  blocked the sign-in page they relied on. `cmd/lbcheck` no longer takes
+  `LETTERBOXD_PASSWORD`.
 - Development builds can load challenged ratings, diary, and film pages
   through a FlareSolverr service set at build time (`FLARESOLVERR_URL`), for
   a server whose IP address Cloudflare keeps challenging. Release builds do

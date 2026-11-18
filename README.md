@@ -152,9 +152,8 @@ from the cache, and later syncs take seconds.
   retried, a dead one reports the connection as needing a new cookie. A public
   watchlist reads fine with a dead cookie, so a cookie that dies later shows at
   the next write.
-- **Connections made before 0.4.0** used a password and keep working. They sign
-  in again when their session expires, and a Cloudflare challenge on that
-  sign-in pauses the sync.
+- **Connections made before 0.4.0** used a password, which the plugin no
+  longer supports. Connect them again with a cookie.
 
 ### Ratings
 
@@ -314,9 +313,7 @@ the movie stays marked watched. The read alone also checks that the rewatch
 check reports the same rating as the ratings list. Without `-write`, `-rate`,
 `-rerate`, or `-log`,
 `cmd/lbcheck` does not prove that the cookie works. `-debug` shows how the site's pages
-describe the session, with every value but the username redacted. With
-`LETTERBOXD_PASSWORD` instead of the cookie, `cmd/lbcheck` tries the password
-sign-in.
+describe the session, with every value but the username redacted.
 
 ## Development
 

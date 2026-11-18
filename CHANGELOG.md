@@ -33,6 +33,10 @@ Notable changes to the Letterboxd watch-provider plugin. Versions follow
 - An unchanged watchlist is read with one page request instead of all of
   them: when the first page and the entry count match the last full read,
   that read is served. A full read still runs once a day.
+- Development builds can load challenged ratings, diary, and film pages
+  through a FlareSolverr service set at build time (`FLARESOLVERR_URL`), for
+  a server whose IP address Cloudflare keeps challenging. Release builds do
+  not use it.
 
 ## 0.4.0 — 2026-11-09
 

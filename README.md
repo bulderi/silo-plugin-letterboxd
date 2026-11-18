@@ -269,7 +269,7 @@ The plugin sends at most one request every 1.5 seconds across all connected
 accounts. Page reads and film lookups each spend at most 60 seconds per host
 page, so a large watchlist, ratings list, or diary spreads over many pages instead of hitting the host's
 two-minute call limit. A Cloudflare challenge pauses the connection for an hour,
-and a 429 for its `Retry-After`. The plugin never tries to solve a challenge.
+and a 429 for its `Retry-After`.
 A batch of changes stops starting new ones 30 seconds before Silo's deadline
 for the call, since a diary play can take several requests; the rest are
 retried.
@@ -328,7 +328,22 @@ make build-all   # dist/ binaries for the platforms in manifest.json
 ```
 
 The build takes its version from `manifest.json`, so Silo's plugin admin shows
-which build is installed. The plugin starts through the SDK's manifest
+which build is installed.
+
+Cloudflare challenges some servers' IP addresses, typically in data centers, far
+more often than home connections. For development on such a server, a build can
+load challenged public pages through a [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)
+service instead of pausing:
+
+```sh
+make build-all FLARESOLVERR_URL=http://flaresolverr:8191
+```
+
+Only ratings and diary pages and film lookups go through it, in a signed-out
+browser that never gets the member's cookie. Watchlist pages and the day's
+diary page before a play is logged do not, because signed out they can miss
+private entries. The plugin logs each page it loads that way. `cmd/lbcheck`
+takes the same URL with `-flaresolverr`. Release builds leave it empty. The plugin starts through the SDK's manifest
 bootstrap (`runtime.ServeManifest`), which validates the manifest, stamps the
 version and the binary's checksum, and answers `plugin manifest`.
 

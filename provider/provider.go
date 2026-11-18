@@ -47,6 +47,10 @@ type Options struct {
 	Now        func() time.Time
 	// Location dates diary entries; nil uses the process's time zone (TZ).
 	Location *time.Location
+	// FlareSolverrURL is a FlareSolverr service that loads challenged public
+	// pages, for development on a server Cloudflare keeps challenging. Empty
+	// in release builds.
+	FlareSolverrURL string
 }
 
 // Provider is the WatchSyncProvider server.
@@ -54,6 +58,7 @@ type Provider struct {
 	pluginv1.UnimplementedWatchSyncProviderServer
 
 	baseURL    string
+	solverURL  string
 	throttle   *letterboxd.Throttle
 	pageBudget time.Duration
 	logger     hclog.Logger
@@ -85,11 +90,15 @@ func New(opts Options) *Provider {
 	if location == nil {
 		location = time.Local
 	}
+	if opts.FlareSolverrURL != "" {
+		logger.Info("letterboxd challenges go through FlareSolverr")
+	}
 	return &Provider{
 		location:   location,
 		accounts:   newAccountStore(opts.Store, now),
 		watchlists: newWatchlistStore(opts.Store, now),
 		baseURL:    opts.BaseURL,
+		solverURL:  opts.FlareSolverrURL,
 		throttle:   opts.Throttle,
 		pageBudget: budget,
 		logger:     logger,
@@ -100,7 +109,10 @@ func New(opts Options) *Provider {
 }
 
 func (p *Provider) newClient() (*letterboxd.Client, error) {
-	return letterboxd.New(letterboxd.Options{BaseURL: p.baseURL, Throttle: p.throttle})
+	return letterboxd.New(letterboxd.Options{
+		BaseURL: p.baseURL, Throttle: p.throttle, FlareSolverrURL: p.solverURL,
+		Solved: func(path string) { p.logger.Info("letterboxd page loaded through FlareSolverr", "path", path) },
+	})
 }
 
 // ExchangeAPIKey connects an account: the connection config carries the

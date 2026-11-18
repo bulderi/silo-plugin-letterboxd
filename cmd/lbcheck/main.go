@@ -43,6 +43,7 @@ func main() {
 	logEntry := flag.Bool("log", false, "also log the -tmdb film in the diary for today, rate the entry, read it back, and delete it again")
 	tmdbID := flag.Int("tmdb", 0, "TMDB id of a movie that is NOT on the watchlist (with -write) and NOT rated (with -rate)")
 	interval := flag.Duration("interval", 1500*time.Millisecond, "minimum time between requests")
+	solver := flag.String("flaresolverr", "", "FlareSolverr URL, such as http://localhost:8191, that loads challenged public pages")
 	debug = flag.Bool("debug", false, "after sign-in, show the page's person script with values redacted")
 	flag.Parse()
 
@@ -60,7 +61,10 @@ func main() {
 	}
 
 	ctx := context.Background()
-	client, err := letterboxd.New(letterboxd.Options{Throttle: letterboxd.NewThrottle(*interval)})
+	client, err := letterboxd.New(letterboxd.Options{
+		Throttle: letterboxd.NewThrottle(*interval), FlareSolverrURL: *solver,
+		Solved: func(path string) { fmt.Printf("   loaded %s through FlareSolverr\n", path) },
+	})
 	if err != nil {
 		fail("%v", err)
 	}

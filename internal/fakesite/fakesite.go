@@ -90,6 +90,8 @@ type Site struct {
 	rotateRemember bool
 	challenge      map[string]bool
 	rateLimit      map[string]bool
+	solver         *httptest.Server
+	solverError    string
 	refused        map[string]bool
 	missing        map[string]bool
 	reported       *int
@@ -414,6 +416,12 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
+	s.route(w, r)
+}
+
+// route answers a request that got past the challenge and rate-limit checks.
+// The caller holds s.mu.
+func (s *Site) route(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: csrfCookie, Value: csrfValue, Path: "/"})
 	signedIn := s.signedIn(r)
 	path := r.URL.Path
@@ -1038,4 +1046,71 @@ func posterDiv(f Film) string {
 	ident := html.EscapeString(fmt.Sprintf(`{"lid":"%s","uid":"%s","type":"film","typeName":"film"}`, f.LID, f.UID))
 	return fmt.Sprintf(`<div class="react-component" data-component-class="LazyPoster" data-item-name="%s" data-item-slug="%s" data-item-link="/film/%s/" data-item-full-display-name="%s" data-postered-identifier='%s' data-target-link="/film/%s/"><div class="poster film-poster"><img src="x.png" alt="%s"/></div></div>`,
 		name, f.Slug, f.Slug, name, ident, f.Slug, html.EscapeString(f.Title))
+}
+
+// SolverURL starts a fake FlareSolverr service on first use and returns its
+// base URL. Like the real one, it loads a page in a signed-out browser that
+// gets past the challenge, follows redirects, and answers the page's status,
+// final URL, and markup. Its requests are recorded as "SOLVE GET path".
+func (s *Site) SolverURL() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.solver == nil {
+		s.solver = httptest.NewServer(http.HandlerFunc(s.solve))
+		s.t.Cleanup(s.solver.Close)
+	}
+	return s.solver.URL
+}
+
+// FailSolver makes the fake FlareSolverr answer with an error status and
+// message (or stop, msg="").
+func (s *Site) FailSolver(msg string) { s.mu.Lock(); s.solverError = msg; s.mu.Unlock() }
+
+func (s *Site) solve(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cmd        string `json:"cmd"`
+		URL        string `json:"url"`
+		MaxTimeout int    `json:"maxTimeout"`
+		Cookies    []any  `json:"cookies"`
+	}
+	if r.Method != http.MethodPost || r.URL.Path != "/v1" || json.NewDecoder(r.Body).Decode(&req) != nil {
+		s.t.Errorf("fake FlareSolverr: unexpected %s %s", r.Method, r.URL.Path)
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if req.Cmd != "request.get" || req.MaxTimeout <= 0 || len(req.Cookies) > 0 || !strings.HasPrefix(req.URL, s.URL+"/") {
+		s.t.Errorf("fake FlareSolverr: unexpected request %+v", req)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.solverError != "" {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": s.solverError})
+		return
+	}
+	target := req.URL
+	var rec *httptest.ResponseRecorder
+	for range 10 {
+		page, _ := http.NewRequest(http.MethodGet, target, nil)
+		s.requests = append(s.requests, "SOLVE GET "+page.URL.Path)
+		rec = httptest.NewRecorder()
+		s.route(rec, page)
+		if rec.Code < 300 || rec.Code >= 400 {
+			break
+		}
+		next, err := page.URL.Parse(rec.Header().Get("Location"))
+		if err != nil {
+			break
+		}
+		target = next.String()
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"message": "Challenge not detected!",
+		"solution": map[string]any{
+			"url":      target,
+			"status":   rec.Code,
+			"response": rec.Body.String(),
+		},
+	})
 }

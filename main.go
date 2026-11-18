@@ -22,6 +22,12 @@ var manifestJSON []byte
 // version is set at build time via -ldflags "-X main.version=...".
 var version string
 
+// flareSolverrURL is set only in development builds, via -ldflags
+// "-X main.flareSolverrURL=http://flaresolverr:8191", for a server whose IP
+// address Cloudflare keeps challenging. Release builds leave it empty and
+// talk only to letterboxd.com.
+var flareSolverrURL string
+
 // requestInterval spaces out every request to Letterboxd, across all
 // connected accounts.
 const requestInterval = 1500 * time.Millisecond
@@ -34,9 +40,10 @@ func main() {
 		JSONFormat: true,
 	})
 	sdkruntime.ServeManifest(manifestJSON, version, capabilityServers(provider.Options{
-		Throttle: letterboxd.NewThrottle(requestInterval),
-		Store:    hostStore{},
-		Logger:   logger,
+		Throttle:        letterboxd.NewThrottle(requestInterval),
+		Store:           hostStore{},
+		Logger:          logger,
+		FlareSolverrURL: flareSolverrURL,
 	}))
 }
 

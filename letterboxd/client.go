@@ -40,7 +40,8 @@ const (
 
 var (
 	// ErrChallenge means Cloudflare answered with a challenge page instead of
-	// the site. The client never tries to solve one.
+	// the site. The client tries to get past one only through a FlareSolverr
+	// service, when Options sets one.
 	ErrChallenge = errors.New("letterboxd answered with a Cloudflare challenge")
 	// ErrNotFound means the page or film does not exist.
 	ErrNotFound = errors.New("letterboxd page not found")
@@ -124,6 +125,13 @@ type Options struct {
 	BaseURL  string
 	Throttle *Throttle
 	Timeout  time.Duration
+	// FlareSolverrURL is a FlareSolverr service, such as
+	// http://flaresolverr:8191, that loads a challenged public page in a
+	// signed-out browser. Empty means a challenge is an error.
+	FlareSolverrURL string
+	// Solved, when set, is called with the path of each page loaded through
+	// FlareSolverr.
+	Solved func(path string)
 }
 
 // Session is the cookies that keep an account signed in and able to write.
@@ -143,6 +151,8 @@ type Client struct {
 	base     *url.URL
 	http     tls_client.HttpClient
 	throttle *Throttle
+	solver   *flareSolverr
+	solved   func(path string)
 }
 
 // New creates a client with an empty cookie jar.
@@ -168,7 +178,13 @@ func New(opts Options) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create http client: %w", err)
 	}
-	return &Client{base: base, http: hc, throttle: opts.Throttle}, nil
+	client := &Client{base: base, http: hc, throttle: opts.Throttle, solved: opts.Solved}
+	if opts.FlareSolverrURL != "" {
+		if client.solver, err = newFlareSolverr(opts.FlareSolverrURL); err != nil {
+			return nil, err
+		}
+	}
+	return client, nil
 }
 
 // ProbeLID is a film ID that cannot exist; see SessionCanWrite.
@@ -398,8 +414,14 @@ func DiaryDayPath(username string, day time.Time) string {
 
 // ListPage loads one page of a member's list: a path from ListPath, a
 // previous page's NextPath, or for the diary DiaryDayPath. A private list
-// read without a valid session is ErrForbidden.
+// read without a valid session is ErrForbidden. A challenged ratings or diary
+// page is loaded through FlareSolverr when one is set; a watchlist page is
+// not, because a private watchlist reads as refused signed out.
 func (c *Client) ListPage(ctx context.Context, kind ListKind, path string) (ListPage, error) {
+	return c.listPage(ctx, kind, path, kind != ListWatchlist)
+}
+
+func (c *Client) listPage(ctx context.Context, kind ListKind, path string, solvable bool) (ListPage, error) {
 	list, ok := lists[kind]
 	if !ok {
 		return ListPage{}, fmt.Errorf("%s: %w", kind, ErrUnexpectedPage)
@@ -407,7 +429,11 @@ func (c *Client) ListPage(ctx context.Context, kind ListKind, path string) (List
 	if !strings.HasPrefix(path, "/") || strings.Contains(path, "//") {
 		return ListPage{}, fmt.Errorf("%s path %q: %w", list.name, path, ErrUnexpectedPage)
 	}
-	resp, err := c.get(ctx, path, false)
+	get := c.get
+	if solvable {
+		get = c.getPage
+	}
+	resp, err := get(ctx, path, false)
 	if err != nil {
 		return ListPage{}, err
 	}
@@ -420,7 +446,7 @@ func (c *Client) ListPage(ctx context.Context, kind ListKind, path string) (List
 
 // Film loads a film page by slug.
 func (c *Client) Film(ctx context.Context, slug string) (FilmPage, error) {
-	resp, err := c.get(ctx, "/film/"+url.PathEscape(slug)+"/", false)
+	resp, err := c.getPage(ctx, "/film/"+url.PathEscape(slug)+"/", false)
 	if err != nil {
 		return FilmPage{}, err
 	}
@@ -441,7 +467,7 @@ func (c *Client) FilmByExternalID(ctx context.Context, namespace, id string) (Fi
 	if id == "" || strings.ContainsAny(id, "/?#") {
 		return FilmPage{}, ErrNotFound
 	}
-	resp, err := c.get(ctx, "/"+namespace+"/"+url.PathEscape(id)+"/", true)
+	resp, err := c.getPage(ctx, "/"+namespace+"/"+url.PathEscape(id)+"/", true)
 	if err != nil {
 		return FilmPage{}, err
 	}
@@ -456,9 +482,10 @@ func (c *Client) FilmByExternalID(ctx context.Context, namespace, id string) (Fi
 }
 
 // DiaryHasFilm reports whether the member's diary has an entry for the film
-// on that date.
+// on that date. It never goes through FlareSolverr: signed out, a private
+// entry could be missing, and the play would be logged twice.
 func (c *Client) DiaryHasFilm(ctx context.Context, username, lid string, day time.Time) (bool, error) {
-	page, err := c.ListPage(ctx, ListDiary, DiaryDayPath(username, day))
+	page, err := c.listPage(ctx, ListDiary, DiaryDayPath(username, day), false)
 	if err != nil {
 		return false, err
 	}
@@ -805,6 +832,11 @@ func (c *Client) get(ctx context.Context, path string, follow bool) (response, e
 	if err != nil {
 		return response{}, err
 	}
+	return pageResult(path, resp)
+}
+
+// pageResult maps a page's non-200 answer to an error.
+func pageResult(path string, resp response) (response, error) {
 	switch resp.status {
 	case http.StatusOK:
 		return resp, nil
@@ -901,9 +933,14 @@ func isChallenge(resp *http.Response, body []byte) bool {
 	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusServiceUnavailable {
 		return false
 	}
-	// Cloudflare injects /cdn-cgi/challenge-platform/ into every HTML page,
-	// including Letterboxd's own 403 page, so only the interstitial's markers
-	// count.
+	return challengeBody(body)
+}
+
+// challengeBody reports whether a page is Cloudflare's interstitial.
+// Cloudflare injects /cdn-cgi/challenge-platform/ into every HTML page,
+// including Letterboxd's own 403 page, so only the interstitial's markers
+// count.
+func challengeBody(body []byte) bool {
 	text := string(body)
 	return strings.Contains(text, "challenges.cloudflare.com") ||
 		strings.Contains(text, "<title>Just a moment...</title>")

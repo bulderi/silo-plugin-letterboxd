@@ -21,7 +21,10 @@ CSRF tokens; replace them with placeholders.
   connection made before version 0.4.0 also holds a password, used only to sign
   in again when a session expires. The plugin never writes the password, the
   cookies, or page contents to logs or error messages.
-- **Network access.** The plugin talks only to `letterboxd.com`.
+- **Network access.** The plugin talks only to `letterboxd.com`. A
+  development build can be given a FlareSolverr service at build time; it
+  then also sends that service the addresses of challenged public pages,
+  never cookies.
 - **Stored data.** The plugin's own instance state holds a cache of public film
   identifiers (Letterboxd film ID, TMDB and IMDb IDs, title, year) and, per
   Letterboxd account, the last full watchlist read and the diary entries the

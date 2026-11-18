@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 
@@ -250,5 +251,24 @@ func TestRatingsTraversalRefusesWatchlistToken(t *testing.T) {
 	})
 	if resp.GetFault() == nil || len(resp.GetItems()) != 0 {
 		t.Fatalf("a ratings read continued a watchlist snapshot: %v", resp)
+	}
+}
+
+// Every rating carries the time of the read, so a rating that changed on both
+// sides since they last agreed, including every differing rating on a first
+// sync, goes to Letterboxd rather than being overwritten by Silo's.
+func TestRatingsCarryTheReadTime(t *testing.T) {
+	readAt := time.Date(2026, 11, 18, 9, 30, 0, 0, time.UTC)
+	h := newHarness(t, func(o *Options) { o.Now = func() time.Time { return readAt } })
+	h.site.SetRatings(fakesite.Rating{LID: "aA1", Rating: 7}, fakesite.Rating{LID: "bB2", Rating: 9})
+	h.connectCookie()
+	items, _, _, fault := h.listKind(kindRating)
+	if fault != nil || len(items) != 2 {
+		t.Fatalf("items %v fault %v", items, fault)
+	}
+	for _, item := range items {
+		if got := item.GetRating().GetRatedAt(); got == nil || !got.AsTime().Equal(readAt) {
+			t.Errorf("%s: rated_at = %v, want the read time %v", item.GetProviderItemKey(), got, readAt)
+		}
 	}
 }

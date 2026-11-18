@@ -334,6 +334,7 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 			return fail(err, noun+" read")
 		}
 		snap.films = append(make([]letterboxd.Poster, 0, len(films)), films...)
+		snap.readAt = p.now()
 		if kind != letterboxd.ListWatchlist {
 			snap.cursor = p.nextCursor(snap, films)
 		}
@@ -381,7 +382,7 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 				items = append(items, watchedState(film, day, snap.plays[poster.LID]))
 			}
 		case film.isMovie():
-			items = append(items, remoteState(film, kind, poster.Rating))
+			items = append(items, remoteState(film, kind, poster.Rating, snap.readAt))
 		case film.TMDBType == "tv":
 			warnings.tv = append(warnings.tv, poster.Name)
 		default:
@@ -458,10 +459,19 @@ func (p *Provider) fetchPoster(ctx context.Context, sess *session, poster letter
 
 // remoteState is a film of a watchlist or ratings traversal. A rating comes
 // from the ratings page, which only lists films with one.
-func remoteState(film cachedFilm, kind letterboxd.ListKind, rating int) *pluginv1.WatchSyncRemoteState {
+//
+// A rating carries the time of the read as its rated_at. Letterboxd shows no
+// rating times, and Letterboxd is the member's source of truth: when Silo and
+// Letterboxd both changed a film's rating since they last agreed, Silo keeps
+// the newer one and, without a time, its own. On a first sync every differing
+// rating counts as changed on both sides, so Silo's ratings, for example ones
+// imported from another tracker, would overwrite the member's Letterboxd
+// ratings. With the read time, Letterboxd's wins such a conflict, while a
+// rating changed only in Silo still reaches Letterboxd.
+func remoteState(film cachedFilm, kind letterboxd.ListKind, rating int, readAt time.Time) *pluginv1.WatchSyncRemoteState {
 	state := filmState(film)
 	if kind == letterboxd.ListRatings {
-		state.Rating = &pluginv1.WatchSyncRemoteRatingState{Rating: int32(rating)}
+		state.Rating = &pluginv1.WatchSyncRemoteRatingState{Rating: int32(rating), RatedAt: timestamppb.New(readAt)}
 	} else {
 		state.Watchlist = &pluginv1.WatchSyncRemoteListState{}
 	}

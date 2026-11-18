@@ -10,6 +10,8 @@ Notable changes to the Letterboxd watch-provider plugin. Versions follow
   finished the film, because rating a film on Letterboxd marks it watched.
 - Rating reads are complete snapshots checked against the count Letterboxd
   reports, like watchlist reads, and fail rather than return a partial list.
+- When a rating differs on both sides, including on the first sync,
+  Letterboxd's is kept: ratings Silo already had never overwrite Letterboxd's.
 - `cmd/lbcheck` reads the ratings, and `-rate` rates one film, reads it back,
   and removes the rating.
 - Diary entries come into Silo as plays. With the new connection setting **Log

@@ -166,8 +166,14 @@ servers that store whole stars round on their side (see
   films rated between ½ and ★★★★★"). A tile without a rating, a short read, or
   a page without films that does not say the member has rated none fails the
   read, because Silo treats a film missing from a complete snapshot as unrated.
-  Letterboxd's pages do not say when a film was rated, so when both sides
-  change the same rating between syncs, Silo's wins.
+  Letterboxd is the source of truth: when both sides changed a film's rating
+  since they last agreed, Letterboxd's is kept and Silo takes it. That
+  includes the first sync, when every rating that differs counts as changed
+  on both sides, so ratings Silo already had, for example from another
+  tracker, never overwrite Letterboxd's. Letterboxd's pages do not say when a
+  film was rated, so the plugin reports the time of the read, which Silo uses
+  to pick the newer change. A rating changed only in Silo still reaches
+  Letterboxd.
 - **Writes** set the desired rating, so a retry is harmless. Removing a rating
   that is not there, or one for a film Letterboxd does not have or lists as TV,
   answers "no change" rather than an error, as the contract requires.

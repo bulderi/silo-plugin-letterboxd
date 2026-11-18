@@ -36,6 +36,9 @@ type snapshot struct {
 	// back on its last page, set once every list page is read.
 	plan   readPlan
 	cursor string
+	// readAt is when every list page had been read; ratings report it as
+	// their time (see remoteState).
+	readAt time.Time
 	// seq is the page number the next token must carry, so a replayed or
 	// stale token is refused.
 	seq     int

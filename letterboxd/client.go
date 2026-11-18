@@ -778,7 +778,7 @@ func (c *Client) patchMe(ctx context.Context, prefix, lid, filmSlug, body string
 // returns the answer's body.
 func (c *Client) sendJSON(ctx context.Context, method, path, filmSlug, body string) ([]byte, error) {
 	if c.cookie(csrfCookie) == "" {
-		if err := c.Home(ctx); err != nil {
+		if err := c.loadCSRFCookie(ctx, filmSlug); err != nil {
 			return nil, err
 		}
 	}
@@ -808,6 +808,17 @@ func (c *Client) sendJSON(ctx context.Context, method, path, filmSlug, body stri
 	default:
 		return nil, &StatusError{Method: method, Path: path, Status: resp.status}
 	}
+}
+
+// loadCSRFCookie loads a page so the jar holds a CSRF cookie: the film's own
+// page when the write is about a film, because Cloudflare challenges the
+// front page far more often.
+func (c *Client) loadCSRFCookie(ctx context.Context, filmSlug string) error {
+	if filmSlug == "" {
+		return c.Home(ctx)
+	}
+	_, err := c.get(ctx, "/film/"+url.PathEscape(filmSlug)+"/", false)
+	return err
 }
 
 type request struct {

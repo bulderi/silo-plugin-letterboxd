@@ -272,3 +272,22 @@ func TestRatingsCarryTheReadTime(t *testing.T) {
 		}
 	}
 }
+
+// Cloudflare challenges the front page far more often than film pages, so a
+// write for a film whose lookup is cached still gets its CSRF cookie.
+func TestSetRatingWithFrontPageChallenged(t *testing.T) {
+	h := newHarness(t)
+	h.connectCookie()
+	ids := map[string]string{"tmdb": "5550001"}
+	if resp := h.apply(ratingEvent("1", opSetRating, "", ids, 6)); resp.GetResults()[0].GetStatus() != statusApplied {
+		t.Fatalf("first rating: %v", resp)
+	}
+	h.site.Challenge("/", true)
+	resp := h.apply(ratingEvent("2", opSetRating, "", ids, 9))
+	if resp.GetFault() != nil || resp.GetResults()[0].GetStatus() != statusApplied {
+		t.Fatalf("rating with the front page challenged: %v", resp)
+	}
+	if got := h.site.Ratings()["aA1"]; got != 9 {
+		t.Fatalf("Letterboxd holds %d, want 9", got)
+	}
+}

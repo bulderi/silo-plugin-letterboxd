@@ -139,8 +139,10 @@ from the cache, and later syncs take seconds.
 - **Sessions.** A new connection stores the `letterboxd.user` cookie and never
   opens the sign-in page, which sits behind a Cloudflare challenge. The cookie
   is stored as both the access and refresh token until the site sets a session
-  cookie. Each write call loads the front page once for a fresh CSRF cookie,
-  because the plugin cannot sign in again to replace a stale one. A rotated
+  cookie. Each write call loads the film's page, or the front page for a
+  write without a film, once for a fresh CSRF cookie, because the plugin
+  cannot sign in again to replace a stale one. Cloudflare challenges the front
+  page far more often than film pages. A rotated
   cookie is returned to Silo as updated credentials.
 - **Cookie checks.** A new connection is accepted only if the Letterboxd
   settings page shows that the cookie is signed in as the given username, which

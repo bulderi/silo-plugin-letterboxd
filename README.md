@@ -1,5 +1,14 @@
 # Letterboxd watch-provider plugin for Silo
 
+> [!WARNING]
+> This is an unofficial plugin, not made or endorsed by Letterboxd or Silo. It
+> changes your Letterboxd watchlist, ratings, and diary. Use it at your own
+> risk: it comes without warranty, and the author is not responsible for lost
+> or changed data on Letterboxd or in Silo, or for anything Letterboxd does to
+> your account. Consider
+> [exporting your Letterboxd data](https://letterboxd.com/settings/data/)
+> before you connect.
+
 Keeps your Silo watchlist, movie ratings, and diary in sync with your
 [Letterboxd](https://letterboxd.com) account, in both directions. Movies only;
 series in Silo are left alone.
@@ -9,9 +18,14 @@ series in Silo are left alone.
 | | Letterboxd → Silo | Silo → Letterboxd |
 |---|---|---|
 | **Watchlist** | Yes | Yes |
-| **Ratings** | Yes | Yes, once you have watched the film in Silo |
+| **Ratings** | Yes | Yes\* |
 | **Diary** | Yes, as plays | Optional, off by default |
 | **Likes, lists, reviews** | No | No |
+
+\* Rating a film on Letterboxd also marks it as watched. So a new rating for a
+film you have not finished in Silo waits, and is sent once you finish it. You
+can rate first or watch first. Changing a rating Letterboxd already has is
+sent right away.
 
 ## Install
 

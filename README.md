@@ -342,7 +342,9 @@ Only ratings and diary pages and film lookups go through it, in a signed-out
 browser that never gets the member's cookie. Watchlist pages and the day's
 diary page before a play is logged do not, because signed out they can miss
 private entries. The plugin logs each page it loads that way. `cmd/lbcheck`
-takes the same URL with `-flaresolverr`. Release builds leave it empty. The plugin starts through the SDK's manifest
+takes the same URL with `-flaresolverr`. Release builds leave it empty.
+
+The plugin starts through the SDK's manifest
 bootstrap (`runtime.ServeManifest`), which validates the manifest, stamps the
 version and the binary's checksum, and answers `plugin manifest`.
 

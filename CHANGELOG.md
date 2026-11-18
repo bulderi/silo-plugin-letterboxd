@@ -3,7 +3,7 @@
 Notable changes to the Letterboxd watch-provider plugin. Versions follow
 `version` in `manifest.json`; each release is tagged `v<version>`.
 
-## Unreleased
+## 0.5.0 — 2026-11-18
 
 - Ratings sync both ways for movies. Letterboxd's half stars map exactly to
   Silo's 1-to-10 scale. A rating made in Silo is sent once the profile has

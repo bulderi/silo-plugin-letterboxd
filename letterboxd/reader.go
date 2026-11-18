@@ -35,6 +35,7 @@ type ListReader struct {
 	seenFilms map[string]bool
 	films     []Poster
 	total     int
+	firstPage []Poster
 	// stop ends the read early after a page it returns true for; stopped
 	// records that it did.
 	stop    func(ListPage) bool
@@ -60,6 +61,12 @@ func (r *ListReader) StopWhen(stop func(ListPage) bool) { r.stop = stop }
 // Stopped reports whether StopWhen ended the read before the last page.
 func (r *ListReader) Stopped() bool { return r.stopped }
 
+// FirstPage is the films of the first page, once it is read.
+func (r *ListReader) FirstPage() []Poster { return r.firstPage }
+
+// Total is the entry count the first page reported, or -1.
+func (r *ListReader) Total() int { return r.total }
+
 // Kind is the list the reader reads.
 func (r *ListReader) Kind() ListKind { return r.kind }
 
@@ -84,6 +91,7 @@ func (r *ListReader) ReadPage(ctx context.Context, c *Client) error {
 	}
 	if r.pages == 0 {
 		r.total = page.Total
+		r.firstPage = page.Films
 	}
 	r.seenPaths[r.next] = true
 	r.pages++

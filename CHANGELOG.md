@@ -30,6 +30,9 @@ Notable changes to the Letterboxd watch-provider plugin. Versions follow
   diary read once a week.
 - `cmd/lbcheck -rerate` changes an older rating and sets it back, to check the
   order the short ratings reads rely on.
+- An unchanged watchlist is read with one page request instead of all of
+  them: when the first page and the entry count match the last full read,
+  that read is served. A full read still runs once a day.
 
 ## 0.4.0 — 2026-11-09
 

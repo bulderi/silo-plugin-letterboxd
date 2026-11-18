@@ -23,8 +23,9 @@ CSRF tokens; replace them with placeholders.
   cookies, or page contents to logs or error messages.
 - **Network access.** The plugin talks only to `letterboxd.com`.
 - **Stored data.** The plugin's own instance state holds a cache of public film
-  identifiers (Letterboxd film ID, TMDB and IMDb IDs, title, year), never
-  account data.
+  identifiers (Letterboxd film ID, TMDB and IMDb IDs, title, year) and, per
+  Letterboxd account, the last full watchlist read and the diary entries the
+  plugin logged. It holds no cookies. Silo encrypts instance state at rest.
 
 A problem in any of these, such as a credential reaching a log line or a
 request going to another host, is a security issue.

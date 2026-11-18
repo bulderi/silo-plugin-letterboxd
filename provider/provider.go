@@ -62,7 +62,9 @@ type Provider struct {
 	snapshots  *snapshotStore
 	// accounts is what the plugin keeps per Letterboxd account.
 	accounts *accountStore
-	location *time.Location
+	// watchlists are each account's last full watchlist read.
+	watchlists *watchlistStore
+	location   *time.Location
 }
 
 // New creates a Provider.
@@ -86,6 +88,7 @@ func New(opts Options) *Provider {
 	return &Provider{
 		location:   location,
 		accounts:   newAccountStore(opts.Store, now),
+		watchlists: newWatchlistStore(opts.Store, now),
 		baseURL:    opts.BaseURL,
 		throttle:   opts.Throttle,
 		pageBudget: budget,
@@ -327,6 +330,12 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 			return fail(err, noun+" read")
 		}
 		worked = true
+		if kind == letterboxd.ListWatchlist && snap.reader.PagesRead() == 1 && !snap.reader.Done() {
+			if films, ok := p.watchlists.unchanged(ctx, username, snap.reader.FirstPage(), snap.reader.Total()); ok {
+				snap.films, snap.readAt = films, p.now()
+				p.logger.Info("letterboxd watchlist unchanged; serving the last full read", "username", username, "films", len(films))
+			}
+		}
 	}
 	if snap.pagesDone() && snap.films == nil {
 		films, err := snap.reader.Films()
@@ -340,6 +349,11 @@ func (p *Provider) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncL
 		}
 		if kind == letterboxd.ListDiary {
 			snap.films, snap.plays = aggregateDiary(films)
+		}
+		if kind == letterboxd.ListWatchlist {
+			if err := p.watchlists.save(ctx, username, films, len(snap.reader.FirstPage()), snap.reader.Total()); err != nil {
+				p.logger.Warn("letterboxd watchlist snapshot not saved; the next read loads every page", "error", err)
+			}
 		}
 		p.logger.Info("letterboxd "+noun+" read", "username", username, "incremental", snap.plan.incremental,
 			"films", len(films), "pages", snap.reader.PagesRead())

@@ -238,6 +238,13 @@ servers that store whole stars round on their side (see
 
 ### Short reads
 
+- **Watchlist** reads must hand Silo the whole list, but most syncs find it
+  unchanged. Letterboxd lists the watchlist newest first, so an added film
+  changes the first page and a removed one lowers the entry count. When the
+  first page and the count match the last full read, the plugin serves that
+  read, kept per account in its instance state, after loading one page
+  instead of all of them. A full read still runs at least once a day.
+
 Ratings and diary reads hand Silo a cursor, which Silo keeps with the
 connection and sends with the next read, so a sync reads only the newest pages:
 

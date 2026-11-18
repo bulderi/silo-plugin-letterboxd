@@ -748,6 +748,9 @@ func TestListWatchlistReadsPagesAcrossCalls(t *testing.T) {
 	if _, _, fault := h.listAll(); fault != nil { // fills the film cache
 		t.Fatal(fault)
 	}
+	// A film added on Letterboxd changes the first page, so the read loads
+	// every page again rather than serving the last full read.
+	h.site.SetWatchlist("gG7", "aA1", "bB2", "cC3", "dD4")
 	before := h.site.CountRequests("GET /samplemember/watchlist/")
 	resp, _ := h.p.ListRemoteState(context.Background(), &pluginv1.WatchSyncListRemoteStateRequest{
 		Context:    h.authContext(),

@@ -70,12 +70,32 @@
       ]
     }
   ],
+  "global_config_schema": [
+    {
+      "key": "flaresolverr",
+      "title": "FlareSolverr",
+      "description": "Only for servers Letterboxd keeps blocking with a Cloudflare check, which pauses sync for an hour each time. A FlareSolverr service then loads those public pages in its own browser. It never gets anyone's Letterboxd cookie. Leave empty to talk only to letterboxd.com.",
+      "json_schema": "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\",\"pattern\":\"^$|^https?://[^\\\\s/?#]+(/[^\\\\s?#]*)?$\",\"maxLength\":2048}},\"additionalProperties\":false}",
+      "required": false,
+      "admin_form": {
+        "fields": [
+          {
+            "key": "url",
+            "label": "FlareSolverr URL",
+            "description": "The service's address as Silo reaches it, such as http://flaresolverr:8191.",
+            "control": "ADMIN_FORM_CONTROL_TEXT",
+            "placeholder": "http://flaresolverr:8191"
+          }
+        ]
+      }
+    }
+  ],
   "category": "Watch Providers",
   "presentation": {
     "display_name": "Letterboxd Watch Provider",
     "summary": "Sync a Silo profile's watchlist, ratings, and diary with Letterboxd, movies only.",
     "description_markdown": "Imports the Letterboxd watchlist into Silo in Letterboxd's order, sends watchlist adds and removals made in Silo back to Letterboxd, syncs movie ratings both ways, imports diary entries as plays, logs plays finished in Silo in the diary, and leaves series alone. Letterboxd has no public API for this, so the plugin uses the website the way a signed-in browser does.",
-    "setup_markdown": "Each Silo profile connects with its own Letterboxd account. Sign in at letterboxd.com in a browser and copy the value of the `letterboxd.user` cookie. Your username goes in the connection's username field and the cookie value in the field Silo labels API key. Silo stores both encrypted. The cookie gives full access to the account, so treat it like a password. When Letterboxd stops accepting it, connect again with a new one. The plugin needs no server-wide settings.\n\nTurn on **Sync watchlist removals** so a film removed on one side is removed on the other. Ratings sync both ways in half stars. A rating made in Silo reaches Letterboxd once the profile has finished the film, because rating a film on Letterboxd also marks it watched.\n\nDiary entries come into Silo as plays. Turn on **Log plays in the Letterboxd diary** to have movies finished in Silo logged in the diary, dated in the Silo server's time zone, with the rating you give them in Silo within a week; plays from more than a day before you turn it on are not logged, so it does not add your whole history to the diary.\n\nThe first sync looks up every watchlisted and rated film once, at about 1.5 seconds per film; later syncs take seconds.",
+    "setup_markdown": "Each Silo profile connects with its own Letterboxd account. Sign in at letterboxd.com in a browser and copy the value of the `letterboxd.user` cookie. Your username goes in the connection's username field and the cookie value in the field Silo labels API key. Silo stores both encrypted. The cookie gives full access to the account, so treat it like a password. When Letterboxd stops accepting it, connect again with a new one. If Letterboxd keeps blocking your server with a Cloudflare check, set a FlareSolverr service in the plugin's settings.\n\nTurn on **Sync watchlist removals** so a film removed on one side is removed on the other. Ratings sync both ways in half stars. A rating made in Silo reaches Letterboxd once the profile has finished the film, because rating a film on Letterboxd also marks it watched.\n\nDiary entries come into Silo as plays. Turn on **Log plays in the Letterboxd diary** to have movies finished in Silo logged in the diary, dated in the Silo server's time zone, with the rating you give them in Silo within a week; plays from more than a day before you turn it on are not logged, so it does not add your whole history to the diary.\n\nThe first sync looks up every watchlisted and rated film once, at about 1.5 seconds per film; later syncs take seconds.",
     "homepage_url": "https://letterboxd.com",
     "source_url": "https://github.com/bulderi/silo-plugin-letterboxd",
     "support_url": "https://github.com/bulderi/silo-plugin-letterboxd/issues",

@@ -46,6 +46,12 @@ func TestManifest(t *testing.T) {
 		settings[0].GetDefaultValue() == nil || settings[0].GetDefaultValue().GetBoolValue() {
 		t.Errorf("connection settings = %v, want %s as a boolean that defaults to false", settings, provider.SettingLogPlays)
 	}
+	// FlareSolverr is optional, under the key and field the provider reads.
+	global := manifest.GetGlobalConfigSchema()
+	if len(global) != 1 || global[0].GetKey() != provider.SettingFlareSolverr || global[0].GetRequired() ||
+		len(global[0].GetAdminForm().GetFields()) != 1 || global[0].GetAdminForm().GetFields()[0].GetKey() != provider.SettingFlareSolverrURL {
+		t.Errorf("global config = %v, want an optional %s with one %s field", global, provider.SettingFlareSolverr, provider.SettingFlareSolverrURL)
+	}
 	// A diary entry cannot be unlogged from a Silo unwatch, and Letterboxd
 	// has no playback to scrobble.
 	if ws.GetExportUnwatched() || ws.GetImportFavorites() || ws.GetScrobblePlayback() || ws.GetImportProgress() {

@@ -17,22 +17,25 @@ import (
 // context sets no earlier deadline.
 const solverTimeout = 60 * time.Second
 
-// flareSolverr loads pages in a real browser through a FlareSolverr service
-// (https://github.com/FlareSolverr/FlareSolverr). It is for development on a
-// server whose IP address Cloudflare keeps challenging; release builds leave
-// it unset. The browser is signed out: a request carries none of the member's
+// FlareSolverr loads pages in a real browser through a FlareSolverr service
+// (https://github.com/FlareSolverr/FlareSolverr). It is for a server whose IP
+// address Cloudflare keeps challenging, and only when the plugin's settings
+// name one. The browser is signed out: a request carries none of the member's
 // cookies.
-type flareSolverr struct {
+type FlareSolverr struct {
 	endpoint string
 	http     *http.Client
 }
 
-func newFlareSolverr(raw string) (*flareSolverr, error) {
-	u, err := url.Parse(strings.TrimRight(raw, "/"))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("FlareSolverr URL %q is not an http(s) URL", raw)
+// NewFlareSolverr takes the service's address, such as
+// http://flaresolverr:8191, with or without its /v1 endpoint path.
+func NewFlareSolverr(raw string) (*FlareSolverr, error) {
+	u, err := url.Parse(strings.TrimSuffix(strings.TrimRight(raw, "/"), "/v1"))
+	// The error leaves out the address, which may carry a password.
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+		return nil, errors.New("FlareSolverr URL is not an http(s) address")
 	}
-	return &flareSolverr{endpoint: u.String() + "/v1", http: &http.Client{}}, nil
+	return &FlareSolverr{endpoint: u.String() + "/v1", http: &http.Client{}}, nil
 }
 
 type solverAnswer struct {
@@ -46,7 +49,7 @@ type solverAnswer struct {
 }
 
 // get loads pageURL and returns the page's status, final URL, and markup.
-func (f *flareSolverr) get(ctx context.Context, pageURL string) (int, *url.URL, []byte, error) {
+func (f *FlareSolverr) get(ctx context.Context, pageURL string) (int, *url.URL, []byte, error) {
 	timeout := solverTimeout
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {
 		timeout = time.Until(deadline)

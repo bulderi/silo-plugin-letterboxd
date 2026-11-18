@@ -22,12 +22,6 @@ var manifestJSON []byte
 // version is set at build time via -ldflags "-X main.version=...".
 var version string
 
-// flareSolverrURL is set only in development builds, via -ldflags
-// "-X main.flareSolverrURL=http://flaresolverr:8191", for a server whose IP
-// address Cloudflare keeps challenging. Release builds leave it empty and
-// talk only to letterboxd.com.
-var flareSolverrURL string
-
 // requestInterval spaces out every request to Letterboxd, across all
 // connected accounts.
 const requestInterval = 1500 * time.Millisecond
@@ -39,18 +33,19 @@ func main() {
 		Output:     os.Stderr,
 		JSONFormat: true,
 	})
-	sdkruntime.ServeManifest(manifestJSON, version, capabilityServers(provider.Options{
-		Throttle:        letterboxd.NewThrottle(requestInterval),
-		Store:           hostStore{},
-		Logger:          logger,
-		FlareSolverrURL: flareSolverrURL,
-	}))
+	p := provider.New(provider.Options{
+		Throttle: letterboxd.NewThrottle(requestInterval),
+		Store:    hostStore{},
+		Logger:   logger,
+	})
+	sdkruntime.ServeManifestWithOptions(manifestJSON, version, capabilityServers(p),
+		sdkruntime.WithConfigure(p.Configure))
 }
 
 // capabilityServers is what main serves; tests build the same set against a
 // fake Letterboxd.
-func capabilityServers(opts provider.Options) sdkruntime.CapabilityServers {
-	return sdkruntime.CapabilityServers{WatchSyncProvider: provider.New(opts)}
+func capabilityServers(p *provider.Provider) sdkruntime.CapabilityServers {
+	return sdkruntime.CapabilityServers{WatchSyncProvider: p}
 }
 
 var errHostUnavailable = errors.New("silo runtime host is not bound yet")

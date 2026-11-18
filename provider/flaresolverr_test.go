@@ -1,21 +1,49 @@
 package provider
 
 import (
+	"context"
 	"slices"
 	"testing"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/bulderi/silo-plugin-letterboxd/internal/fakesite"
 )
 
 // newSolvingHarness is a harness whose provider loads challenged public
-// pages through the fake site's FlareSolverr.
+// pages through the fake site's FlareSolverr, set the way Silo sends the
+// plugin's settings.
 func newSolvingHarness(t *testing.T) *harness {
 	t.Helper()
 	h := newHarness(t)
-	h.p = New(Options{BaseURL: h.site.URL, Store: h.store, FlareSolverrURL: h.site.SolverURL()})
+	h.configureSolver(h.site.SolverURL())
 	return h
+}
+
+func (h *harness) configureSolver(url string) {
+	h.t.Helper()
+	value, err := structpb.NewStruct(map[string]any{SettingFlareSolverrURL: url})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.p.Configure(context.Background(), []*pluginv1.ConfigEntry{{Key: SettingFlareSolverr, Value: value}}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// An address the schema lets through but the plugin cannot use turns
+// FlareSolverr off instead of failing every sync.
+func TestUnusableFlareSolverrSettingIsIgnored(t *testing.T) {
+	h := newHarness(t)
+	h.configureSolver("http://flaresolverr:port")
+	h.site.SetWatchlist("aA1")
+	h.connectCookie()
+
+	items, _, _, fault := h.listKind(pluginv1.WatchSyncRemoteStateKind_WATCH_SYNC_REMOTE_STATE_KIND_WATCHLIST)
+	if fault != nil || len(items) != 1 {
+		t.Fatalf("items %v fault %v", keys(items), fault)
+	}
 }
 
 // With FlareSolverr set, a ratings read whose pages and film lookups are

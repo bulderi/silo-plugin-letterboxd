@@ -19,10 +19,10 @@ CSRF tokens; replace them with placeholders.
   cookies encrypted and passes them to the plugin only for the duration of a
   call. The `letterboxd.user` cookie gives full access to the account. The
   plugin never writes the cookies or page contents to logs or error messages.
-- **Network access.** The plugin talks only to `letterboxd.com`. A
-  development build can be given a FlareSolverr service at build time; it
-  then also sends that service the addresses of challenged public pages,
-  never cookies.
+- **Network access.** The plugin talks only to `letterboxd.com`, unless an
+  administrator sets a FlareSolverr service in the plugin's settings. It then
+  also sends that service the addresses of challenged public pages, never
+  cookies.
 - **Stored data.** The plugin's own instance state holds a cache of public film
   identifiers (Letterboxd film ID, TMDB and IMDb IDs, title, year) and, per
   Letterboxd account, the last full watchlist read and the diary entries the

@@ -57,13 +57,27 @@ to connect again.
   rating you give in Silo within a week is added to the entry. Entries you
   edited yourself are left alone.
 - **Letterboxd sometimes blocks servers.** The site sits behind Cloudflare. When
-  it blocks a sync, the plugin waits an hour and tries again.
+  it blocks a sync, the plugin waits an hour and tries again. If that happens
+  often, see [FlareSolverr](#flaresolverr).
 - **Skipped items show as sync warnings**, for example TV titles or films
   Letterboxd cannot link to TMDB or IMDb.
 - Letterboxd has no public API, so the plugin uses the website like a browser
   does. A change on Letterboxd's side can break it until the plugin is updated.
 - Connections made with a password before 0.4.0 must be connected again with a
   cookie.
+
+## FlareSolverr
+
+Cloudflare blocks servers in data centers far more often than home servers.
+If it keeps pausing your sync, run a
+[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) container that
+Silo can reach, and enter its address, such as `http://flaresolverr:8191`, in
+the plugin's settings. Blocked rating, diary, and film pages then load through
+its browser instead.
+
+FlareSolverr never gets anyone's cookie, so it only loads public pages. The
+watchlist and the check before a diary entry can hold private entries, so they
+never go through it. Leave the setting empty to talk only to letterboxd.com.
 
 ---
 
@@ -129,21 +143,8 @@ its change afterwards. `-write` adds and removes a watchlist film, `-rate`
 rates and unrates one, `-rerate` changes one of your ratings and sets it back,
 and `-log` logs, rates, and deletes a diary entry. A rated movie stays marked
 watched, so pick one you have seen. `-debug` shows how the site describes the
-session, with values redacted.
-
-### FlareSolverr
-
-Cloudflare challenges data-center IP addresses far more often than home
-connections. For development on such a server, a build can load challenged
-ratings, diary, and film pages through
-[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) instead of pausing.
-It runs signed out and never gets the cookie, so watchlist pages and the diary
-check before a log, which can hold private entries, never use it. Release
-builds leave it off.
-
-```sh
-make build-all FLARESOLVERR_URL=http://flaresolverr:8191
-```
+session, with values redacted. `-flaresolverr <url>` loads blocked pages
+through FlareSolverr, as the plugin's setting does.
 
 ### Manual installs
 

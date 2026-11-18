@@ -30,7 +30,7 @@ func newGRPCClient(t *testing.T, site *fakesite.Site) pluginv1.WatchSyncProvider
 	if err != nil {
 		t.Fatal(err)
 	}
-	servers := capabilityServers(provider.Options{BaseURL: site.URL})
+	servers := capabilityServers(provider.New(provider.Options{BaseURL: site.URL}))
 	// ServeManifest adds a Runtime server answering GetManifest with the
 	// loaded manifest; the test adds the same.
 	servers.Runtime = &manifestRuntime{manifest: manifest}

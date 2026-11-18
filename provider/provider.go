@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
@@ -26,6 +27,13 @@ const (
 	challengeBackoff = time.Hour
 	// deadlineHeadroom leaves time to answer before the host's RPC deadline.
 	deadlineHeadroom = 30 * time.Second
+)
+
+// SettingFlareSolverr is the server-wide setting that names a FlareSolverr
+// service, in its SettingFlareSolverrURL field.
+const (
+	SettingFlareSolverr    = "flaresolverr"
+	SettingFlareSolverrURL = "url"
 )
 
 // usernamePattern is what can be a Letterboxd username. It keeps an email
@@ -47,18 +55,15 @@ type Options struct {
 	Now        func() time.Time
 	// Location dates diary entries; nil uses the process's time zone (TZ).
 	Location *time.Location
-	// FlareSolverrURL is a FlareSolverr service that loads challenged public
-	// pages, for development on a server Cloudflare keeps challenging. Empty
-	// in release builds.
-	FlareSolverrURL string
 }
 
 // Provider is the WatchSyncProvider server.
 type Provider struct {
 	pluginv1.UnimplementedWatchSyncProviderServer
 
-	baseURL    string
-	solverURL  string
+	baseURL string
+	// solver is the FlareSolverr service from the plugin's settings, or nil.
+	solver     atomic.Pointer[letterboxd.FlareSolverr]
 	throttle   *letterboxd.Throttle
 	pageBudget time.Duration
 	logger     hclog.Logger
@@ -90,15 +95,11 @@ func New(opts Options) *Provider {
 	if location == nil {
 		location = time.Local
 	}
-	if opts.FlareSolverrURL != "" {
-		logger.Info("letterboxd challenges go through FlareSolverr")
-	}
 	return &Provider{
 		location:   location,
 		accounts:   newAccountStore(opts.Store, now),
 		watchlists: newWatchlistStore(opts.Store, now),
 		baseURL:    opts.BaseURL,
-		solverURL:  opts.FlareSolverrURL,
 		throttle:   opts.Throttle,
 		pageBudget: budget,
 		logger:     logger,
@@ -108,9 +109,33 @@ func New(opts Options) *Provider {
 	}
 }
 
+// Configure applies the plugin's server-wide settings, which Silo sends when
+// the plugin starts and restarts it to change.
+func (p *Provider) Configure(_ context.Context, entries []*pluginv1.ConfigEntry) error {
+	var raw string
+	for _, entry := range entries {
+		if entry.GetKey() == SettingFlareSolverr {
+			raw, _ = entry.GetValue().AsMap()[SettingFlareSolverrURL].(string)
+		}
+	}
+	p.solver.Store(nil)
+	if raw == "" {
+		return nil
+	}
+	solver, err := letterboxd.NewFlareSolverr(raw)
+	if err != nil {
+		// A failed start would stop every sync, not just challenged pages.
+		p.logger.Warn("FlareSolverr setting ignored", "error", err)
+		return nil
+	}
+	p.solver.Store(solver)
+	p.logger.Info("letterboxd challenges go through FlareSolverr")
+	return nil
+}
+
 func (p *Provider) newClient() (*letterboxd.Client, error) {
 	return letterboxd.New(letterboxd.Options{
-		BaseURL: p.baseURL, Throttle: p.throttle, FlareSolverrURL: p.solverURL,
+		BaseURL: p.baseURL, Throttle: p.throttle, FlareSolverr: p.solver.Load(),
 		Solved: func(path string) { p.logger.Info("letterboxd page loaded through FlareSolverr", "path", path) },
 	})
 }

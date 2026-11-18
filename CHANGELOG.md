@@ -39,10 +39,10 @@ Notable changes to the Letterboxd watch-provider plugin. Versions follow
   stop working and must be connected again with a cookie; Cloudflare already
   blocked the sign-in page they relied on. `cmd/lbcheck` no longer takes
   `LETTERBOXD_PASSWORD`.
-- Development builds can load challenged ratings, diary, and film pages
-  through a FlareSolverr service set at build time (`FLARESOLVERR_URL`), for
-  a server whose IP address Cloudflare keeps challenging. Release builds do
-  not use it.
+- A new plugin setting, **FlareSolverr URL**, loads challenged ratings,
+  diary, and film pages through a FlareSolverr service, for a server whose IP
+  address Cloudflare keeps challenging. It is empty by default, and the
+  service never gets a cookie.
 
 ## 0.4.0 — 2026-11-09
 

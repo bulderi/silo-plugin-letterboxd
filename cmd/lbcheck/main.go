@@ -59,8 +59,16 @@ func main() {
 	}
 
 	ctx := context.Background()
+	var flareSolverr *letterboxd.FlareSolverr
+	if *solver != "" {
+		s, err := letterboxd.NewFlareSolverr(*solver)
+		if err != nil {
+			fail("%v", err)
+		}
+		flareSolverr = s
+	}
 	client, err := letterboxd.New(letterboxd.Options{
-		Throttle: letterboxd.NewThrottle(*interval), FlareSolverrURL: *solver,
+		Throttle: letterboxd.NewThrottle(*interval), FlareSolverr: flareSolverr,
 		Solved: func(path string) { fmt.Printf("   loaded %s through FlareSolverr\n", path) },
 	})
 	if err != nil {

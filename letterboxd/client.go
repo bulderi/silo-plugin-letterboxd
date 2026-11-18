@@ -122,10 +122,9 @@ type Options struct {
 	BaseURL  string
 	Throttle *Throttle
 	Timeout  time.Duration
-	// FlareSolverrURL is a FlareSolverr service, such as
-	// http://flaresolverr:8191, that loads a challenged public page in a
-	// signed-out browser. Empty means a challenge is an error.
-	FlareSolverrURL string
+	// FlareSolverr loads a challenged public page in a signed-out browser.
+	// Nil means a challenge is an error.
+	FlareSolverr *FlareSolverr
 	// Solved, when set, is called with the path of each page loaded through
 	// FlareSolverr.
 	Solved func(path string)
@@ -145,7 +144,7 @@ type Client struct {
 	base     *url.URL
 	http     tls_client.HttpClient
 	throttle *Throttle
-	solver   *flareSolverr
+	solver   *FlareSolverr
 	solved   func(path string)
 }
 
@@ -172,13 +171,7 @@ func New(opts Options) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create http client: %w", err)
 	}
-	client := &Client{base: base, http: hc, throttle: opts.Throttle, solved: opts.Solved}
-	if opts.FlareSolverrURL != "" {
-		if client.solver, err = newFlareSolverr(opts.FlareSolverrURL); err != nil {
-			return nil, err
-		}
-	}
-	return client, nil
+	return &Client{base: base, http: hc, throttle: opts.Throttle, solver: opts.FlareSolverr, solved: opts.Solved}, nil
 }
 
 // ProbeLID is a film ID that cannot exist; see SessionCanWrite.

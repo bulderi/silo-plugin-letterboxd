@@ -15,7 +15,11 @@ func newSolvingSite(t *testing.T) (*fakesite.Site, *Client, *[]string) {
 	site := fakesite.New(t)
 	site.AddFilms(quietHarbor, northernLights, miniSeries)
 	var solved []string
-	client, err := New(Options{BaseURL: site.URL, FlareSolverrURL: site.SolverURL(),
+	solver, err := NewFlareSolverr(site.SolverURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := New(Options{BaseURL: site.URL, FlareSolverr: solver,
 		Solved: func(path string) { solved = append(solved, path) }})
 	if err != nil {
 		t.Fatal(err)

@@ -175,7 +175,8 @@ curl -X POST "$SILO_URL/api/v2/admin/plugins/installations" \
 
 Sync warnings need a Silo server with
 [Silo-Server/silo-server#1800](https://github.com/Silo-Server/silo-server/pull/1800).
-Binaries are published for Linux amd64, Linux arm64, and macOS arm64.
+Binaries are published for Linux amd64, Linux arm64, macOS arm64, FreeBSD amd64,
+and FreeBSD arm64.
 
 ### Release
 

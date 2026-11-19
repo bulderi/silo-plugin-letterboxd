@@ -1,7 +1,7 @@
 .PHONY: build build-all clean lint test
 
 BINARY=plugin
-PLATFORMS=linux/amd64 linux/arm64 darwin/arm64
+PLATFORMS=linux/amd64 linux/arm64 darwin/arm64 freebsd/amd64 freebsd/arm64
 # The version comes from manifest.json, so a local build reports the same
 # version a release of this commit would.
 VERSION ?= $(shell sed -n 's/^  "version": "\(.*\)",$$/\1/p' manifest.json)

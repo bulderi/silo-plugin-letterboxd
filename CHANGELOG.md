@@ -3,6 +3,21 @@
 Notable changes to the Letterboxd watch-provider plugin. Versions follow
 `version` in `manifest.json`; each release is tagged `v<version>`.
 
+## 0.5.1 — 2026-11-19
+
+- Diary entries are dated in the Silo server's `TZ` even when its container
+  has no time zone data; before, they were silently dated in UTC.
+- Connecting checks only the username field on Letterboxd's settings page, so
+  a username that equals another field's value, such as the language code
+  `en`, no longer passes for a cookie signed in as someone else.
+- A FlareSolverr service that stops answering times out instead of stalling
+  the sync.
+- When the film cache trims old films, it also drops their TMDB and IMDb ids.
+- `cmd/lbcheck` checks that the cookie is signed in as the username, as
+  connecting does.
+- Builds against `silo-plugin-sdk` v0.35.0 with Go 1.27.4 and updated
+  `tls-client`, `grpc`, and `x/net`.
+
 ## 0.5.0 — 2026-11-18
 
 - Ratings sync both ways for movies. Letterboxd's half stars map exactly to

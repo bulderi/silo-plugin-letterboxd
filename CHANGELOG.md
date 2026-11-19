@@ -3,6 +3,10 @@
 Notable changes to the Letterboxd watch-provider plugin. Versions follow
 `version` in `manifest.json`; each release is tagged `v<version>`.
 
+## 0.5.2 — 2026-11-19
+
+- Releases include binaries for FreeBSD amd64 and FreeBSD arm64.
+
 ## 0.5.1 — 2026-11-19
 
 - Diary entries are dated in the Silo server's `TZ` even when its container

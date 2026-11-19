@@ -99,8 +99,6 @@ never go through it. Leave the setting empty to talk only to letterboxd.com.
 
 - **Plugin ID:** `bulderi.letterboxd`
 - **Capability:** `watch_sync_provider.v1`, id `letterboxd`
-- Builds against `silo-plugin-sdk` v0.32.1 and uses a Chrome TLS fingerprint to
-  reach the site through Cloudflare.
 
 ### How sync stays safe
 

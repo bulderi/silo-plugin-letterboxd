@@ -67,7 +67,9 @@ to connect again.
 - **Letterboxd wins rating conflicts.** If a rating changed on both sides, the
   Letterboxd rating is kept. Half stars convert exactly: 3½ stars is 7 in Silo.
 - **Diary entries are public, and the plugin cannot delete them.** It logs only
-  new plays, never your old history, and at most once per film per day. A
+  new plays, never your old history, and at most once per film per day.
+  Entries are dated in the Silo server's time zone, its `TZ` setting, so set
+  `TZ` (for example `TZ=Europe/Stockholm`) if the server runs in UTC. A
   rating you give in Silo within a week is added to the entry. Entries you
   edited yourself are left alone.
 - **Letterboxd sometimes blocks servers.** The site sits behind Cloudflare. When

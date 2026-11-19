@@ -8,6 +8,9 @@ import (
 	"errors"
 	"os"
 	"time"
+	// Diary dates use TZ; a container without zoneinfo would otherwise date
+	// them in UTC without a word.
+	_ "time/tzdata"
 
 	sdkruntime "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/runtime"
 	"github.com/hashicorp/go-hclog"

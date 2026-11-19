@@ -84,6 +84,12 @@ func main() {
 	if err := client.Home(ctx); err != nil {
 		fail("%v", err)
 	}
+	step("check the cookie is signed in as the username, as connecting does")
+	if owner, err := client.IsSignedInAs(ctx, username); err != nil {
+		fail("%v", err)
+	} else if !owner {
+		fail("the settings page does not show %s as the signed-in member", username)
+	}
 	if !*write && !*rate && !*rerate && !*logEntry {
 		fmt.Println("   only -write, -rate, -rerate, or -log proves the cookie works")
 	}

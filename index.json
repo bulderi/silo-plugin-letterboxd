@@ -3,11 +3,19 @@
     {
       "manifest": {
         "plugin_id": "bulderi.letterboxd",
-        "version": "0.5.1",
+        "version": "0.5.2",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
             "os": "darwin",
+            "arch": "arm64"
+          },
+          {
+            "os": "freebsd",
+            "arch": "amd64"
+          },
+          {
+            "os": "freebsd",
             "arch": "arm64"
           },
           {
@@ -116,19 +124,27 @@
         }
       },
       "repo_url": "https://github.com/bulderi/silo-plugin-letterboxd",
-      "checksums_url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.1/checksums.txt",
+      "checksums_url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.2/checksums.txt",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.1/plugin-darwin-arm64",
-          "checksum": "66201f4a4b95aaa0671c0bb81e25e96b9c948ac47c55204df1fdf7f75584fffb"
+          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.2/plugin-darwin-arm64",
+          "checksum": "f10585a3bf75b86d8a25706f7021fe436591bc6fb88ba73339483071a8620cc6"
+        },
+        "freebsd/amd64": {
+          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.2/plugin-freebsd-amd64",
+          "checksum": "8bf8d286ecc2b90c02165089e3ef5410d7c5184656fc1c25683d58ea5b7e1cf1"
+        },
+        "freebsd/arm64": {
+          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.2/plugin-freebsd-arm64",
+          "checksum": "776f5fa62b61c7a0ab950d382e0e1345fd8c975361f30865378c142d61504c9f"
         },
         "linux/amd64": {
-          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.1/plugin-linux-amd64",
-          "checksum": "4fb71e4130714fd765597458200b2f882c70e14d77dfb4977eeb3c13414a74d3"
+          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.2/plugin-linux-amd64",
+          "checksum": "02c579484f32b11bb2560e110f24fcbe855b586c3d548e788bd4911d0963613a"
         },
         "linux/arm64": {
-          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.1/plugin-linux-arm64",
-          "checksum": "4b53a23f916f3b2c6bf77871d5481b2a6087e78d9365ae176958cd34574807ae"
+          "url": "https://github.com/bulderi/silo-plugin-letterboxd/releases/download/v0.5.2/plugin-linux-arm64",
+          "checksum": "02e2a4ffb4543d1003d93c888870ce4c7eed241339bbcaaa3b516ae1a518595f"
         }
       }
     }

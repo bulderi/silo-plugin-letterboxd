@@ -138,14 +138,7 @@ func (c *filmCache) load(ctx context.Context) error {
 }
 
 func (c *filmCache) indexLocked(film cachedFilm) {
-	if old, ok := c.byLID[film.LID]; ok {
-		if c.byTMDB[old.TMDBID] == old.LID {
-			delete(c.byTMDB, old.TMDBID)
-		}
-		if c.byIMDb[old.IMDbID] == old.LID {
-			delete(c.byIMDb, old.IMDbID)
-		}
-	}
+	c.forgetLocked(film.LID)
 	c.byLID[film.LID] = film
 	if film.TMDBID != "" && film.TMDBType == "movie" {
 		c.byTMDB[film.TMDBID] = film.LID
@@ -153,6 +146,21 @@ func (c *filmCache) indexLocked(film cachedFilm) {
 	if film.IMDbID != "" {
 		c.byIMDb[film.IMDbID] = film.LID
 	}
+}
+
+// forgetLocked removes a film and the external ids that point to it.
+func (c *filmCache) forgetLocked(lid string) {
+	old, ok := c.byLID[lid]
+	if !ok {
+		return
+	}
+	if c.byTMDB[old.TMDBID] == lid {
+		delete(c.byTMDB, old.TMDBID)
+	}
+	if c.byIMDb[old.IMDbID] == lid {
+		delete(c.byIMDb, old.IMDbID)
+	}
+	delete(c.byLID, lid)
 }
 
 // byLIDAny returns a cached film however old it is.
@@ -261,7 +269,7 @@ func (c *filmCache) encodeShardLocked(shard int) ([]byte, error) {
 		}
 		keep := len(films) * 9 / 10
 		for _, dropped := range films[keep:] {
-			delete(c.byLID, dropped.LID)
+			c.forgetLocked(dropped.LID)
 		}
 		films = films[:keep]
 	}

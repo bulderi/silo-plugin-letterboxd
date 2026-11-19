@@ -65,14 +65,16 @@ func TestClientRefusesARedirectOffTheSite(t *testing.T) {
 
 func TestIsSignedInAsIgnoresCase(t *testing.T) {
 	site := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
-		_, _ = w.Write([]byte(`<input name="username" value="SampleMember">`))
+		_, _ = w.Write([]byte(`<select name="language"><option value="en"></select><input name="locale" value="en">` +
+			`<input name="username" value="SampleMember">`))
 	}))
 	defer site.Close()
 	c, err := New(Options{BaseURL: site.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for username, want := range map[string]bool{"samplemember": true, "SAMPLEMEMBER": true, "someoneelse": false} {
+	// "en" matches other fields' values, not the username field.
+	for username, want := range map[string]bool{"samplemember": true, "SAMPLEMEMBER": true, "someoneelse": false, "en": false} {
 		got, err := c.IsSignedInAs(context.Background(), username)
 		if err != nil || got != want {
 			t.Errorf("%s: got %v, %v; want %v", username, got, err, want)

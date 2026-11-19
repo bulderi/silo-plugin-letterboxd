@@ -234,15 +234,14 @@ func (c *Client) Session() Session {
 
 // IsSignedInAs reports whether the session belongs to username. Most pages are
 // cached guest templates, but the settings page puts a signed-in member's
-// username in a form field and has none for a guest. username must not need
-// HTML escaping.
+// username in its username field and has none for a guest.
 func (c *Client) IsSignedInAs(ctx context.Context, username string) (bool, error) {
 	resp, err := c.get(ctx, "/settings/", false)
 	if err != nil {
 		return false, err
 	}
-	field := `value="` + strings.ToLower(username) + `"`
-	return strings.Contains(strings.ToLower(string(resp.body)), field), nil
+	owner := settingsUsername(resp.body)
+	return owner != "" && strings.EqualFold(owner, username), nil
 }
 
 // SessionCanWrite reports whether the site accepts writes from this session,

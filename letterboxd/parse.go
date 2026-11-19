@@ -384,6 +384,27 @@ func slugFromFilmURL(raw string) string {
 	return strings.TrimSpace(slug)
 }
 
+// settingsUsername is the value of the settings page's username field, or ""
+// when the page has none. Only that field counts: another field whose value
+// happens to equal a short username, such as a language code, must not.
+func settingsUsername(body []byte) string {
+	z := html.NewTokenizer(bytes.NewReader(body))
+	for {
+		switch z.Next() {
+		case html.ErrorToken:
+			return ""
+		case html.StartTagToken, html.SelfClosingTagToken:
+			tok := z.Token()
+			if tok.Data != "input" {
+				continue
+			}
+			if attrs := attrMap(tok); attrs["name"] == "username" {
+				return strings.TrimSpace(attrs["value"])
+			}
+		}
+	}
+}
+
 func attrMap(tok html.Token) map[string]string {
 	attrs := make(map[string]string, len(tok.Attr))
 	for _, a := range tok.Attr {

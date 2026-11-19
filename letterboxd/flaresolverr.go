@@ -35,7 +35,9 @@ func NewFlareSolverr(raw string) (*FlareSolverr, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("FlareSolverr URL is not an http(s) address")
 	}
-	return &FlareSolverr{endpoint: u.String() + "/v1", http: &http.Client{}}, nil
+	// The service gets at most solverTimeout per page; the rest is for its answer,
+	// so a service that hangs cannot stall a call that has no deadline.
+	return &FlareSolverr{endpoint: u.String() + "/v1", http: &http.Client{Timeout: solverTimeout + 15*time.Second}}, nil
 }
 
 type solverAnswer struct {

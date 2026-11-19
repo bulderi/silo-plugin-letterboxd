@@ -1,5 +1,5 @@
 // Command lbcheck checks, against the live site and with the plugin's own
-// client, that this machine can use a Letterboxd cookie to read the watchlist
+// client, that this machine can use a Letterboxd cookie to read the watchlist,
 // ratings, and diary, and optionally add and remove one film, rate and unrate
 // it, or log it in the diary. Run it on the Silo host when the
 // sync misbehaves.

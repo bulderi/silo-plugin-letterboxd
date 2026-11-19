@@ -1,5 +1,5 @@
 // Command plugin is a Silo watch_sync_provider.v1 plugin that syncs a
-// Letterboxd watchlist with the Silo watchlist.
+// Letterboxd account's watchlist, ratings, and diary with Silo.
 package main
 
 import (
